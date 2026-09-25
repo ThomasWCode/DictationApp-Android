@@ -184,7 +184,12 @@ class AssemblyAiStreamingTranscriber(
 
     private fun fault(error: Throwable) {
         logger.warn("Streaming transcriber fault: ${error.message}", error)
+        if (failure == null) failure = error
         begin.completeExceptionally(error)
+        // A fault (e.g. a typed error frame) during the shutdown handshake ends its waits now instead of after they time
+        // out; shutdown then reports the failure rather than returning a partial transcript as complete.
+        endOfTurn?.completeExceptionally(error)
+        termination.completeExceptionally(error)
         onFault?.invoke(error)
     }
 

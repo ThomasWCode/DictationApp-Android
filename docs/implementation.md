@@ -83,5 +83,5 @@ made the communication device for the duration of the dictation.
 
 ## Tests
 
-`./gradlew testDebugUnitTest`: 109 tests (see decisions.md). Robolectric runs the history repository against
+`./gradlew testDebugUnitTest`: 114 tests (see decisions.md). Robolectric runs the history repository against
 Android's SQLite with FTS4 and exercises the retention pass on real files.

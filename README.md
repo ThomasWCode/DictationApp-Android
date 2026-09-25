@@ -49,7 +49,7 @@ Requirements: JDK 17 (Android Studio's bundled JDK 21 also works) and the Androi
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot"
-.\gradlew testDebugUnitTest      # 109 JVM/Robolectric tests
+.\gradlew testDebugUnitTest      # 114 JVM/Robolectric tests
 .\gradlew assembleDebug          # app\build\outputs\apk\debug\app-debug.apk
 ```
 

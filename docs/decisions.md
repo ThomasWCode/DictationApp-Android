@@ -40,7 +40,20 @@ Choices made while porting DictationApp to Android (2026-09-25), with the reason
 
 | Request | Decision | Why |
 |---|---|---|
-| "Per-app settings should start empty, with all apps obeying the general settings; apps can then be added" | `appRules` defaults to an empty list. The 0.1.0 seed is kept as `LegacyAppRules` only for the schema-2 migration, which removes every rule whose target was seeded and keeps rules for other apps, then saves. The App rules screen explains the empty default; **Add app** opens the installed-app picker and starts the rule from the current defaults; **Add website** does the same for a host; "Reset to defaults" became **Remove all**. The Windows app got the same change. | The seeded rules decided tone, cleanup and insertion for Gmail, WhatsApp and others without the user choosing them. Consequence: Gmail, Outlook, Word and Docs now use the default insertion method (type directly), which can drop rich-text formatting there; adding those apps with Insertion = Paste restores the old behaviour, and the App rules screen says so. |
+| "Per-app settings should start empty, with all apps obeying the general settings; apps can then be added" | `appRules` defaults to an empty list. The 0.1.0 seed is kept as `LegacyAppRules` only for the schema-2 migration, which removes rules that are still seeds (same target, insertion method, hint and on/off state) and keeps everything else, then saves. The App rules screen explains the empty default; **Add app** opens the installed-app picker and starts the rule from the current defaults; **Add website** does the same for a host; "Reset to defaults" became **Remove all**. The Windows app got the same change. | The seeded rules decided tone, cleanup and insertion for Gmail, WhatsApp and others without the user choosing them. Consequence: Gmail, Outlook, Word and Docs now use the default insertion method (type directly), which can drop rich-text formatting there; adding those apps with Insertion = Paste restores the old behaviour, and the App rules screen says so. |
+
+## Second Codex review (2026-09-25)
+
+| Finding | Fix |
+|---|---|
+| A socket failure or typed error after the release let a possibly truncated transcript be inserted as a success. | The transcriber remembers the failure even while closing, a fault ends the handshake waits at once, and `shutdown` raises it when no Termination arrived; the session also re-checks its fault. Both save a Failed record with audio for Retry. Deferreds are now completed exceptionally, never cancelled, because awaiting a cancelled one threw `CancellationException` and ended the session silently (found while fixing this). |
+| Disabling the accessibility service mid-dictation left the microphone running with no bubble. | The service discards an active dictation when it disconnects. |
+| `ACTION_CANCEL` on a held bubble inserted the text. | It discards: a system-cancelled touch is not the user letting go. |
+| Log files (kept 14 days) contained dictated text. | Text is logged by length only; Delete all history also deletes the logs. |
+| Delete all could delete the WAV of a dictation in progress. | Files written within the last minute are spared. |
+| The insertion method came from the app where dictation started, even when the text landed elsewhere; History's Insert ignored rules. | Both resolve the rule of the app the text lands in; the tone chosen at the start is kept. |
+| A read blocked on a stalled microphone kept the recorder after stop. | `stop()` stops the `AudioRecord` to unblock it. |
+| (Windows PR) The migration deleted seeded rules the user had customised. | Only rules that are still seeds are removed (see above). |
 
 ## Findings from on-device testing (Galaxy S24, Android 16, Gboard, 2026-09-25)
 
@@ -61,9 +74,9 @@ address bar took the text through the direct path (no clipboard).
 
 ## Testing notes
 
-- 109 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
+- 114 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O, state machine),
   the LLM client against MockWebServer (fallback chain, 401 stop, validation, per-attempt and total timeouts),
-  sixteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the
+  nineteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the
   Android regex-compatibility scan.
 - The accessibility, overlay and microphone code needs a device; see `manual-test-checklist.md`.

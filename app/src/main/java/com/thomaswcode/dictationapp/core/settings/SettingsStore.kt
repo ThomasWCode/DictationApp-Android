@@ -74,12 +74,13 @@ class JsonSettingsStore(private val file: File, private val logger: Logger) : Se
 
     /**
      * Schema 2: app rules start empty and every app follows the Style defaults. The rules 0.1.0 seeded (Gmail formal,
-     * WhatsApp casual, ...) are removed even if edited since; rules for any other app were added by the user and stay.
+     * WhatsApp casual, ...) are removed while they are still seeds; one whose insertion method, hint or on/off switch the
+     * user changed is kept, as is every rule for another app.
      */
     private fun migrate(settings: AppSettings): AppSettings {
         var s = settings
         if (s.schemaVersion < 2) {
-            val kept = s.appRules.filterNot(LegacyAppRules::isSeededTarget)
+            val kept = s.appRules.filterNot(LegacyAppRules::isUnmodifiedSeed)
             logger.info("Migrated settings to schema 2: removed ${s.appRules.size - kept.size} seeded app rules, kept ${kept.size}")
             s = s.copy(appRules = kept, schemaVersion = 2)
         }

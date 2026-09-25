@@ -11,6 +11,7 @@
                 <action android:name="com.thomaswcode.dictationapp.debug.SET_KEYS" />
                 <action android:name="com.thomaswcode.dictationapp.debug.SIMULATE" />
                 <action android:name="com.thomaswcode.dictationapp.debug.STREAM_TEST" />
+                <action android:name="com.thomaswcode.dictationapp.debug.DUMP_FOCUS" />
             </intent-filter>
         </receiver>
     </application>

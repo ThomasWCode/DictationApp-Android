@@ -63,6 +63,7 @@ Choices made while porting DictationApp to Android (2026-09-25), with the reason
 | The first real dictation crashed the process: Android's regex engine is ICU-based and rejects the `(?U)` flag that the JVM accepts, so every JVM test had passed. The `ExceptionInInitializerError` was an `Error`, not an `Exception`, so it escaped the session's error handling. | `(?i)` only (ICU's `\w` and `\b` are Unicode-aware already); numbered instead of named groups; a `CoroutineExceptionHandler` on the app scope; and a unit test that scans the sources for both constructs. |
 | Dragging the bubble sideways from the screen edge also fired the system Back gesture, which closed the keyboard (and so hid the bubble). | `systemGestureExclusionRects` over the bubble. |
 | The dark idle bubble was hard to see over dark apps. | A faint light rim. |
+| "Dictating into WhatsApp puts 'Message' in front of the text; the search bar adds 'Ask Meta AI or Search'" (user report). WhatsApp's empty chat box and search bar hold one zero-width space and report the placeholder as their text, with no hint text and `isShowingHintText` false, so the direct path spliced the dictation into the placeholder. A new adb `DUMP_FOCUS` hook showed it: 21 characters reported, cursor at 1, and moves to 2 or 21 refused. | Short, single-line text whose cursor is not at its end is checked by moving the cursor to the end of the reported text: real text accepts (and gets its cursor back), a stand-in refuses. A stand-in counts as an empty field and is **pasted** at the field's cursor instead of replaced: pasting never removes anything if the check is ever wrong, and it keeps WhatsApp's invisible character. The cost is that the clipboard holds the dictation. Verified in WhatsApp's search bar: the field read back as the zero-width space followed by the dictated sentence. |
 
 Verified on the device: the bubble appears above Gboard in a Compose field and in Chrome's address bar, and hides
 when the keyboard closes; a full dictation (AssemblyAI connect 943 ms, handshake 982 ms, Groq gpt-oss-120b cleanup
@@ -74,9 +75,9 @@ address bar took the text through the direct path (no clipboard).
 
 ## Testing notes
 
-- 114 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
+- 122 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O, state machine),
   the LLM client against MockWebServer (fallback chain, 401 stop, validation, per-attempt and total timeouts),
-  nineteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the
-  Android regex-compatibility scan.
+  nineteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, the
+  placeholder check under Robolectric, and the Android regex-compatibility scan.
 - The accessibility, overlay and microphone code needs a device; see `manual-test-checklist.md`.

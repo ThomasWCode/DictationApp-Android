@@ -64,7 +64,6 @@ import com.thomaswcode.dictationapp.core.dictionary.DictionaryTerm
 import com.thomaswcode.dictationapp.core.history.DictationRecord
 import com.thomaswcode.dictationapp.core.insertion.InsertMethod
 import com.thomaswcode.dictationapp.core.rules.AppRule
-import com.thomaswcode.dictationapp.core.rules.DefaultAppRules
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -228,19 +227,41 @@ fun AppRulesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val s by graph.settings.flow.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<Int?>(null) }
-    var confirmReset by remember { mutableStateOf(false) }
+    var confirmRemoveAll by remember { mutableStateOf(false) }
+    var pickingApp by remember { mutableStateOf(false) }
+
+    /** Adds [rule] (or finds the existing rule for the same app) and opens it in the editor. */
+    fun addAndEdit(rule: AppRule) {
+        val existing = s.appRules.indexOfFirst { !rule.packageGlob.isNullOrBlank() && it.packageGlob.equals(rule.packageGlob, ignoreCase = true) }
+        if (existing >= 0) {
+            editing = existing
+            return
+        }
+
+        graph.settings.update { it.copy(appRules = it.appRules + rule) }
+        editing = s.appRules.size
+    }
 
     SubScreen("App rules", onBack) {
-        Hint("Match an app (package name, wildcards * and ?) or a website host in a supported browser. A website rule beats an app rule; the first match of each kind wins. Unset fields use your defaults.")
+        Hint("Every app uses your default style (Settings › Style) and insertion method (Settings › General) unless you add it here with its own settings.")
         Buttons {
-            Button(onClick = {
-                graph.settings.update { it.copy(appRules = it.appRules + AppRule(packageGlob = "", enabled = true)) }
-                editing = s.appRules.size
-            }) { Text("Add rule") }
-            OutlinedButton(onClick = { confirmReset = true }) { Text("Reset to defaults") }
+            Button(onClick = { pickingApp = true }) { Text("Add app") }
+            OutlinedButton(onClick = {
+                // A new rule starts from the current defaults, so only what should differ needs changing.
+                addAndEdit(AppRule(urlHost = "", tone = s.defaultTone, level = s.defaultCleanupLevel))
+            }) { Text("Add website") }
         }
 
         Panel {
+            if (s.appRules.isEmpty()) {
+                Text(
+                    "No app rules yet, so every app follows your defaults.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+
             s.appRules.forEachIndexed { index, rule ->
                 Row(
                     Modifier.fillMaxWidth().clickable { editing = index }.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
@@ -265,6 +286,18 @@ fun AppRulesScreen(onBack: () -> Unit) {
                     Switch(checked = rule.enabled, onCheckedChange = { v -> graph.settings.update { st -> st.copy(appRules = st.appRules.mapIndexed { i, r -> if (i == index) r.copy(enabled = v) else r }) } })
                 }
             }
+        }
+
+        Hint("A website rule (for Chrome, Edge, Firefox, Samsung Internet and other supported browsers) beats an app rule; the first match of each kind wins. Rich-text editors such as Gmail or Word keep their formatting best with Insertion set to Paste.")
+        if (s.appRules.isNotEmpty()) {
+            Buttons { TextButton(onClick = { confirmRemoveAll = true }) { Text("Remove all", color = Palette.Recording) } }
+        }
+    }
+
+    if (pickingApp) {
+        AppPickerDialog(onDismiss = { pickingApp = false }) { app ->
+            pickingApp = false
+            addAndEdit(AppRule(packageGlob = app.packageName, label = app.label, tone = s.defaultTone, level = s.defaultCleanupLevel))
         }
     }
 
@@ -292,18 +325,18 @@ fun AppRulesScreen(onBack: () -> Unit) {
         }
     }
 
-    if (confirmReset) {
+    if (confirmRemoveAll) {
         AlertDialog(
-            onDismissRequest = { confirmReset = false },
-            title = { Text("Reset app rules?") },
-            text = { Text("Your rules are replaced by the defaults (email formal, chat casual, documents formal).") },
+            onDismissRequest = { confirmRemoveAll = false },
+            title = { Text("Remove all app rules?") },
+            text = { Text("Every app will follow your default style and insertion method.") },
             confirmButton = {
                 TextButton(onClick = {
-                    graph.settings.update { it.copy(appRules = DefaultAppRules.seed()) }
-                    confirmReset = false
-                }) { Text("Reset") }
+                    graph.settings.update { it.copy(appRules = emptyList()) }
+                    confirmRemoveAll = false
+                }) { Text("Remove all", color = Palette.Recording) }
             },
-            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmRemoveAll = false }) { Text("Cancel") } },
         )
     }
 }
@@ -317,7 +350,8 @@ private fun ruleTitle(context: Context, rule: AppRule): String = when {
 
 @Composable
 private fun RuleEditor(rule: AppRule, onDismiss: () -> Unit, onSave: (AppRule) -> Unit, onDelete: () -> Unit) {
-    var isWebsite by remember { mutableStateOf(!rule.urlHost.isNullOrBlank()) }
+    // A new website rule has an empty (not null) host, so it opens in website mode.
+    var isWebsite by remember { mutableStateOf(rule.urlHost != null) }
     var pkg by remember { mutableStateOf(rule.packageGlob.orEmpty()) }
     var label by remember { mutableStateOf(rule.label) }
     var host by remember { mutableStateOf(rule.urlHost.orEmpty()) }

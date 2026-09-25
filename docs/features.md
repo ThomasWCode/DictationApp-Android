@@ -46,16 +46,22 @@ and output validation with raw-text fallback.
 
 App rules match an Android **package name** (wildcards `*` `?`, picked from a list of installed apps) or a
 **website host** read from the address bar of Chrome, Edge, Brave, Vivaldi, Opera, Firefox, Samsung Internet or
-DuckDuckGo. A website rule beats an app rule, which beats the defaults. Seeded rules:
+DuckDuckGo. A website rule beats an app rule, which beats the defaults.
+
+The list starts **empty**: every app follows the default tone and cleanup (Settings › Style) and the default
+insertion method (Settings › General). **Add app** opens the list of installed apps and starts the new rule from
+your current defaults, so you only change what should differ; **Add website** does the same for a browser host.
+Useful examples:
 
 | Target | Tone | Level | Insertion |
 |---|---|---|---|
-| Gmail, Outlook (apps) | Formal | Medium | Paste (keeps signatures and formatting) |
-| mail.google.com, outlook.live.com, outlook.office.com | Formal | Medium | |
-| WhatsApp, WhatsApp Business, Teams, Slack, Messages, Samsung Messages, Telegram, Signal, Messenger; web WhatsApp/Teams/Slack | Casual | Light | |
-| Word, Google Docs (apps) | Formal | Medium | Paste |
-| docs.google.com | Formal | Medium | |
+| Gmail, Outlook, Word, Google Docs (apps) | Formal | Medium | Paste (keeps signatures and formatting) |
+| mail.google.com, docs.google.com | Formal | Medium | |
+| WhatsApp, Messages, Teams, Slack, Signal | Casual | Light | |
 | Termux | Neutral | None | |
+
+Version 0.1.0 seeded rules like these; settings schema 2 removes those seeded entries on upgrade (even edited
+ones) and keeps rules for any other app.
 
 The personal dictionary (up to 100 key terms, starred first) and **Correct last dictation** work as on Windows.
 

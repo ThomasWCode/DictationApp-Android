@@ -38,13 +38,13 @@ right app, tone and status.
 
 | Target | Expect |
 |---|---|
-| Google Messages / Samsung Messages | Casual, typed directly |
-| WhatsApp | Casual, typed directly |
-| Gmail compose | Formal, pasted (signature formatting kept) |
-| Chrome: Gmail web, Google Docs web, a plain textarea | URL rules apply; pasted (web content) |
+| Google Messages / Samsung Messages | Default style, typed directly |
+| WhatsApp | Default style, typed directly; add a WhatsApp rule (e.g. Casual) and check it applies |
+| Gmail compose | Default style; with a Gmail rule set to Paste, signature formatting is kept |
+| Chrome: Gmail web, Google Docs web, a plain textarea | Pasted (web content); a website rule, if added, applies |
 | Chrome address bar | Bubble shows; text goes into the omnibox |
 | Samsung Notes / Google Keep | Default style |
-| Termux | No cleanup |
+| Termux | Default style (add a rule with cleanup None for raw text) |
 | DictationApp's own "Try it" field | Works |
 
 ## History and settings

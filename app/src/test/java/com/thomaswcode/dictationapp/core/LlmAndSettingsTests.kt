@@ -210,6 +210,32 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun schema1SeededRulesAreRemovedAndUserRulesKept() {
+        val file = File(tmp.root, "settings.json").apply {
+            writeText(
+                """{"schemaVersion":1,"appRules":[
+                  {"packageGlob":"com.google.android.gm","tone":"Formal","level":"Medium","insertMethod":"Paste"},
+                  {"packageGlob":"com.whatsapp","tone":"Formal"},
+                  {"urlHost":"docs.google.com","tone":"Formal"},
+                  {"packageGlob":"com.example.notes","tone":"Casual"}
+                ]}""",
+            )
+        }
+        val store = JsonSettingsStore(file, NoLogger)
+        assertEquals(2, store.current.schemaVersion)
+        assertEquals(listOf("com.example.notes"), store.current.appRules.map { it.packageGlob })
+        // Persisted, so the migration runs once.
+        assertTrue(file.readText().contains("\"schemaVersion\": 2"))
+        assertFalse(file.readText().contains("com.whatsapp"))
+    }
+
+    @Test
+    fun schema2RulesAreNotMigratedAgain() {
+        val file = File(tmp.root, "settings.json").apply { writeText("""{"schemaVersion":2,"appRules":[{"packageGlob":"com.whatsapp","tone":"Casual"}]}""") }
+        assertEquals(listOf("com.whatsapp"), JsonSettingsStore(file, NoLogger).current.appRules.map { it.packageGlob })
+    }
+
+    @Test
     fun corruptFileIsMovedAsideAndDefaultsUsed() {
         val file = File(tmp.root, "settings.json").apply { writeText("{ not json") }
         val store = JsonSettingsStore(file, NoLogger)

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DictationApp</string>
+    <string name="accessibility_service_label">DictationApp bubble</string>
+    <string name="accessibility_service_description">Shows the DictationApp bubble when you tap into a text field and types your dictated, cleaned-up text into that field. DictationApp reads which field has focus, its text around the cursor, the app\'s name and the address bar of supported browsers (for app rules). Nothing is read while you are not dictating, and nothing leaves the phone except the audio sent to AssemblyAI and the transcript sent to your cleanup service.</string>
+</resources>

@@ -46,12 +46,14 @@ object FieldInspector {
         text.isNotEmpty() && text.length <= MAX_PLACEHOLDER_LENGTH && '\n' !in text
 
     /**
-     * True when an EditText reports [text] but none of the cursor actions TextView adds whenever it holds real
-     * text (ACTION_SET_SELECTION and movement granularities): the text is a stand-in. WhatsApp's empty chat box
-     * reports "Message" this way, with no hint text and no cursor.
+     * True when an EditText reports [text] but no cursor and none of the cursor actions TextView adds whenever it
+     * holds real text (ACTION_SET_SELECTION and movement granularities): the text is a stand-in. WhatsApp's empty
+     * chat box reports "Message" this way, with no hint text. A reported cursor means real text, whatever actions a
+     * custom accessibility delegate leaves out.
      */
     fun reportsTextWithoutCursor(node: AccessibilityNodeInfo, text: String): Boolean =
         placeholderSized(text) && node.className?.toString() == EDIT_TEXT_CLASS &&
+            node.textSelectionStart < 0 && node.textSelectionEnd < 0 &&
             !node.actionList.contains(AccessibilityAction.ACTION_SET_SELECTION) && node.movementGranularities == 0
 
     /**

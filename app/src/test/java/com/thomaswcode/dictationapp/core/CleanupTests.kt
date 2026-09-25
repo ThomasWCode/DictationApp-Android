@@ -100,6 +100,8 @@ class PromptBuilderTest {
     @Test
     fun promptAsksToRejoinSentencesSplitAtPauses() {
         assertTrue(PromptBuilder.buildSystemPrompt(ctx()).contains("cut where the speaker paused"))
+        // None keeps the transcript's punctuation even when a tone sends it to the LLM.
+        assertFalse(PromptBuilder.buildSystemPrompt(ctx(CleanupLevel.None, Tone.Formal)).contains("cut where the speaker paused"))
     }
 
     @Test

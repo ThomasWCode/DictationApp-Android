@@ -17,7 +17,7 @@ object OutputValidator {
         "the cleaned", "cleaned text:", "cleaned transcript", "output:", "as an ai", "i'm sorry", "i am sorry",
     )
 
-    private val codeFence = Regex("""^```[a-zA-Z]*\s*\n(?<body>[\s\S]*?)\n?```\s*$""")
+    private val codeFence = Regex("""^```[a-zA-Z]*\s*\n([\s\S]*?)\n?```\s*$""")
 
     fun validate(rawInput: String, modelOutput: String?): ValidationResult {
         if (modelOutput == null) {
@@ -52,7 +52,7 @@ object OutputValidator {
     /** Removes code fences, surrounding quotes and Windows line endings. */
     fun strip(output: String): String {
         var text = output.trim()
-        codeFence.find(text)?.let { text = it.groups["body"]!!.value.trim() }
+        codeFence.find(text)?.let { text = it.groupValues[1].trim() }
         if (text.length >= 2) {
             val first = text.first()
             val last = text.last()

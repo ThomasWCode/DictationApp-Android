@@ -5,15 +5,16 @@ package com.thomaswcode.dictationapp.core.cleanup
  * same commands are described to the LLM. Commands are matched as whole words, case-insensitively.
  */
 object SpokenCommandNormaliser {
+    // Only (?i): Android's ICU regex engine rejects the (?U) flag, and its \w and \b are Unicode-aware already.
     // A private-use character cannot collide with dictated text, unlike a word marker.
-    private const val SCRATCH_MARKER = ""
+    private const val SCRATCH_MARKER = "\uE000"
 
-    private val scratchThat = Regex("""(?iU)\bscratch that\b[.,]?""")
-    private val newParagraph = Regex("""(?iU)\s*[.,]?\s*\bnew paragraph\b[.,]?\s*""")
-    private val newLine = Regex("""(?iU)\s*[.,]?\s*\b(?:new line|newline)\b[.,]?\s*""")
-    private val bulletPoint = Regex("""(?iU)\s*[.,]?\s*\bbullet point\b[.,]?\s*""")
+    private val scratchThat = Regex("""(?i)\bscratch that\b[.,]?""")
+    private val newParagraph = Regex("""(?i)\s*[.,]?\s*\bnew paragraph\b[.,]?\s*""")
+    private val newLine = Regex("""(?i)\s*[.,]?\s*\b(?:new line|newline)\b[.,]?\s*""")
+    private val bulletPoint = Regex("""(?i)\s*[.,]?\s*\bbullet point\b[.,]?\s*""")
     private val punctuation = Regex(
-        """(?iU)\s*\b(period|full stop|comma|question mark|exclamation mark|exclamation point|colon|semicolon|semi colon|open paren|open parenthesis|open bracket|close paren|close parenthesis|close bracket)\b[.,]?""",
+        """(?i)\s*\b(period|full stop|comma|question mark|exclamation mark|exclamation point|colon|semicolon|semi colon|open paren|open parenthesis|open bracket|close paren|close parenthesis|close bracket)\b[.,]?""",
     )
     private val collapseSpacesBeforePunctuation = Regex("""\s+([.,?!:;)])""")
     private val spaceAfterNewline = Regex("""\n[ \t]+""")

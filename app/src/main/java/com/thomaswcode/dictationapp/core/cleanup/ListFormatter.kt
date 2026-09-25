@@ -13,10 +13,10 @@ object ListFormatter {
     )
 
     private val marker = Regex(
-        """(?iU)(?<![\w.,])(?:(?<d>\d{1,2})[.):](?=\s)|\b(?:number|point|item)\s+(?<w>one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})\b(?![.,]?\d))""",
+        """(?i)(?<![\w.,])(?:(\d{1,2})[.):](?=\s)|\b(?:number|point|item)\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})\b(?![.,]?\d))""",
     )
 
-    private val trailingJoiner = Regex("""(?iU)[\s,]*\b(?:and then|and|then)\b[\s,]*$|[\s,]+$""")
+    private val trailingJoiner = Regex("""(?i)[\s,]*\b(?:and then|and|then)\b[\s,]*$|[\s,]+$""")
 
     private data class Marker(val index: Int, val length: Int, val value: Int)
 
@@ -73,8 +73,9 @@ object ListFormatter {
     }
 
     private fun valueOf(m: MatchResult): Int {
-        m.groups["d"]?.let { return it.value.toInt() }
-        val w = m.groups["w"]?.value ?: return 0
+        // Numbered groups: named-group lookup is not supported by Kotlin's regex on every Android version.
+        m.groups[1]?.let { return it.value.toInt() }
+        val w = m.groups[2]?.value ?: return 0
         return w.toIntOrNull() ?: words[w.lowercase()] ?: 0
     }
 }

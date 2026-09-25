@@ -39,7 +39,7 @@ right app, tone and status.
 | Target | Expect |
 |---|---|
 | Google Messages / Samsung Messages | Default style, typed directly |
-| WhatsApp | Default style, typed directly; add a WhatsApp rule (e.g. Casual) and check it applies. Into the empty chat box and the empty search bar, only the dictation appears (no "Message" or "Ask Meta AI or Search") |
+| WhatsApp | Default style, typed directly; add a WhatsApp rule (e.g. Casual) and check it applies. Into the empty chat box and the empty search bar, only the dictation appears (no "Message" or "Ask Meta AI or Search"); a second dictation into the chat box follows after one space |
 | Gmail compose | Default style; with a Gmail rule set to Paste, signature formatting is kept |
 | Chrome: Gmail web, Google Docs web, a plain textarea | Pasted (web content); a website rule, if added, applies |
 | Chrome address bar | Bubble shows; text goes into the omnibox |

@@ -520,11 +520,7 @@ class DictationOrchestrator(
         for (frame in s.frames) t.sendAudio(frame.pcm16)
     }
 
-    private fun buildSessionOptions(settings: AppSettings) = SessionOptions(
-        speechModel = settings.speechModel,
-        keyterms = KeytermsSelector.select(settings.dictionary),
-        languageCodes = settings.languageCodes?.takeIf { it.isNotBlank() },
-    )
+    private fun buildSessionOptions(settings: AppSettings) = sessionOptions(settings)
 
     private suspend fun safeCapture(): ForegroundContext = try {
         foreground.capture()
@@ -715,6 +711,24 @@ class DictationOrchestrator(
         /** The insertion method the app rules give [target] (used when text lands somewhere other than where it started). */
         fun insertMethodFor(target: ForegroundContext, settings: AppSettings): InsertMethod =
             AppRulesResolver.resolve(target, settings.appRules, settings.defaultTone, settings.defaultCleanupLevel, settings.insertMethod).insertMethod
+
+        fun sessionOptions(settings: AppSettings) = SessionOptions(
+            speechModel = settings.speechModel,
+            keyterms = KeytermsSelector.select(settings.dictionary),
+            languageCodes = settings.languageCodes?.takeIf { it.isNotBlank() },
+            minTurnSilenceMs = DICTATION_MIN_TURN_SILENCE_MS,
+            maxTurnSilenceMs = DICTATION_MAX_TURN_SILENCE_MS,
+        )
+
+        /**
+         * Silence before AssemblyAI may end a turn at terminal punctuation. Its default (100 ms) suits voice agents:
+         * a pause to think mid-sentence became a full stop and a new capitalised sentence. Dictation needs no early
+         * turn ends, because finishing the dictation force-ends the last turn at once.
+         */
+        const val DICTATION_MIN_TURN_SILENCE_MS = 1_000
+
+        /** Silence after which a turn ends even without terminal punctuation (default 1000 ms). */
+        const val DICTATION_MAX_TURN_SILENCE_MS = 3_600
 
         const val CONNECT_TIMEOUT_MS = 3_000L
         const val HANDSHAKE_CAP_MS = 2_500L

@@ -72,10 +72,12 @@ should... We should ship the new version on Monday, no? Tuesday. What do you thi
 discards; hold → release finalises ("Nothing heard" in a silent room); drag snaps to either edge and remembers its
 height; drop on the target snoozes and "Show now" restores; History lists, shows details and plays audio. Chrome's
 address bar took the text through the direct path (no clipboard).
+| "Dictating straight into a WhatsApp chat box still puts 'Message' in front" (after the first fix; the user allowed testing in WhatsApp chats). `DUMP_FOCUS` in the user's own "Message yourself" chat: an EditText reporting "Message" with no hint, cursor -1, and neither `ACTION_SET_SELECTION` nor movement granularities, so the cursor check never ran. The first fix then recognised it but WhatsApp refused the paste: TextView pastes only at a cursor. | An EditText reporting short text without the cursor actions TextView adds whenever it holds real text is treated as empty, with no cursor move. A stand-in without a cursor gets the dictation through `ACTION_SET_TEXT` (it has nothing to lose), verified against the reported placeholder, which leaves the clipboard alone; one with a cursor is still pasted into. Verified in the chat box: the field read back as exactly the dictated sentence, a second dictation was appended after one space, and the box was then emptied (no draft left, nothing sent). |
+| "Sentences are often split up too much" (reported on Windows; the same code runs here) | `min_turn_silence` 1000 ms and `max_turn_silence` 3600 ms, and the cleanup prompt rule and Light example about full stops placed at pauses, as in the Windows app. | AssemblyAI's 100 ms default ended a turn, and so a sentence, at every pause to think. The phone's `STREAM_TEST` of the test recording went from several sentence-turns to one. |
 
 ## Testing notes
 
-- 122 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
+- 127 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O, state machine),
   the LLM client against MockWebServer (fallback chain, 401 stop, validation, per-attempt and total timeouts),
   nineteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, the

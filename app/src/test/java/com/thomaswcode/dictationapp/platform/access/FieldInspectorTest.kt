@@ -47,10 +47,39 @@ class FieldInspectorTest {
     }
 
     @Test
-    fun `WhatsApp chat box placeholder with the cursor at the start is recognised`() {
+    fun `placeholder with the cursor at the start is recognised`() {
         val node = field("Message", cursor = 0, realLength = 1)
 
         assertTrue(FieldInspector.showsPlaceholder(node, "Message", splicing = true))
+    }
+
+    @Test
+    fun `WhatsApp chat box, an EditText reporting text but no cursor actions, is recognised without moving anything`() {
+        // As seen on the device: text "Message", no hint, cursor -1, no SET_SELECTION, no granularities.
+        val node = field("Message", cursor = -1, realLength = 0, canMoveCursor = false).apply { className = "android.widget.EditText" }
+
+        assertTrue(FieldInspector.showsPlaceholder(node, "Message", splicing = false))
+        assertTrue(moves.isEmpty())
+    }
+
+    @Test
+    fun `an EditText reporting a cursor holds real text even without cursor actions`() {
+        // A custom accessibility delegate may leave the actions out; the cursor alone proves the text is real.
+        val node = field("Hi Sam", cursor = 6, canMoveCursor = false).apply { className = "android.widget.EditText" }
+
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hi Sam", splicing = true))
+        assertTrue(moves.isEmpty())
+    }
+
+    @Test
+    fun `an EditText with real text offers cursor actions and is not taken for a placeholder`() {
+        val node = field("Hi Sam", cursor = 6).apply {
+            className = "android.widget.EditText"
+            movementGranularities = AccessibilityNodeInfo.MOVEMENT_GRANULARITY_CHARACTER or AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD
+        }
+
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hi Sam", splicing = false))
+        assertTrue(moves.isEmpty())
     }
 
     @Test
@@ -87,7 +116,7 @@ class FieldInspectorTest {
     }
 
     @Test
-    fun `fields that cannot move their cursor are trusted rather than cleared`() {
+    fun `custom fields that cannot move their cursor are trusted`() {
         val node = field("Hello", cursor = 0, realLength = 0, canMoveCursor = false)
 
         assertFalse(FieldInspector.showsPlaceholder(node, "Hello", splicing = true))

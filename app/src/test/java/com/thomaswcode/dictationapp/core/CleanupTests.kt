@@ -98,6 +98,22 @@ class PromptBuilderTest {
         PromptContext(level, tone, terms.toList(), "Gmail", "https://mail.google.com/mail/u/0/", "This is an email.")
 
     @Test
+    fun promptAsksToRejoinSentencesSplitAtPauses() {
+        assertTrue(PromptBuilder.buildSystemPrompt(ctx()).contains("cut where the speaker paused"))
+        // None keeps the transcript's punctuation even when a tone sends it to the LLM.
+        assertFalse(PromptBuilder.buildSystemPrompt(ctx(CleanupLevel.None, Tone.Formal)).contains("cut where the speaker paused"))
+    }
+
+    @Test
+    fun sessionsWaitForARealPauseBeforeEndingATurn() {
+        // AssemblyAI's 100 ms default split sentences at every pause to think.
+        val query = com.thomaswcode.dictationapp.core.session.DictationOrchestrator
+            .sessionOptions(com.thomaswcode.dictationapp.core.settings.AppSettings()).buildQueryString()
+        assertTrue(query, query.contains("min_turn_silence=1000"))
+        assertTrue(query, query.contains("max_turn_silence=3600"))
+    }
+
+    @Test
     fun promptContainsLevelToneKeytermsAndContext() {
         val prompt = PromptBuilder.buildSystemPrompt(ctx(CleanupLevel.Medium, Tone.Formal, "LSHTM", "isoniazid"))
         listOf(

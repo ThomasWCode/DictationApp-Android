@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.os.Build
 import com.thomaswcode.dictationapp.core.Logger
 import com.thomaswcode.dictationapp.core.audio.AudioCapture
 import com.thomaswcode.dictationapp.core.audio.AudioCaptureFactory
@@ -54,6 +55,7 @@ class MicrophoneCapture(
     private fun captureLoop() {
         val audioManager = context.getSystemService(AudioManager::class.java)
         var usedCommunicationDevice = false
+        var usedLegacySco = false
         val record = try {
             val minBuffer = AudioRecord.getMinBufferSize(AudioFrame.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             AudioRecord(
@@ -80,9 +82,18 @@ class MicrophoneCapture(
 
             InputDevices.find(context, deviceKey)?.let { device ->
                 record.preferredDevice = device
-                if (device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || device.type == AudioDeviceInfo.TYPE_BLE_HEADSET) {
-                    // Bluetooth headset microphones only carry audio once they are the communication device.
+                // Bluetooth headset microphones only carry audio once they are the communication device.
+                // setCommunicationDevice is API 31; Android 11 (minSdk 30) uses the older SCO switch.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    (device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || device.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+                ) {
                     usedCommunicationDevice = audioManager.setCommunicationDevice(device)
+                } else if (device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
+                    @Suppress("DEPRECATION")
+                    audioManager.startBluetoothSco()
+                    @Suppress("DEPRECATION")
+                    audioManager.isBluetoothScoOn = true
+                    usedLegacySco = true
                 }
 
                 logger.info("Recording from ${InputDevices.nameOf(device)}")
@@ -116,7 +127,15 @@ class MicrophoneCapture(
         } finally {
             runCatching { record.stop() }
             record.release()
-            if (usedCommunicationDevice) runCatching { audioManager.clearCommunicationDevice() }
+            if (usedCommunicationDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) runCatching { audioManager.clearCommunicationDevice() }
+            if (usedLegacySco) {
+                runCatching {
+                    @Suppress("DEPRECATION")
+                    audioManager.isBluetoothScoOn = false
+                    @Suppress("DEPRECATION")
+                    audioManager.stopBluetoothSco()
+                }
+            }
         }
     }
 }
@@ -131,14 +150,14 @@ class AndroidAudioCaptureFactory(private val context: Context, private val logge
 object InputDevices {
     data class Device(val key: String, val name: String)
 
-    private val supported = setOf(
-        AudioDeviceInfo.TYPE_BUILTIN_MIC,
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-        AudioDeviceInfo.TYPE_BLE_HEADSET,
-        AudioDeviceInfo.TYPE_WIRED_HEADSET,
-        AudioDeviceInfo.TYPE_USB_DEVICE,
-        AudioDeviceInfo.TYPE_USB_HEADSET,
-    )
+    private val supported = buildSet {
+        add(AudioDeviceInfo.TYPE_BUILTIN_MIC)
+        add(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+        add(AudioDeviceInfo.TYPE_WIRED_HEADSET)
+        add(AudioDeviceInfo.TYPE_USB_DEVICE)
+        add(AudioDeviceInfo.TYPE_USB_HEADSET)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    }
 
     fun list(context: Context): List<Device> =
         context.getSystemService(AudioManager::class.java).getDevices(AudioManager.GET_DEVICES_INPUTS)

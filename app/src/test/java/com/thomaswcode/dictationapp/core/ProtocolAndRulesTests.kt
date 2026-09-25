@@ -137,6 +137,9 @@ class SessionOptionsAndParserTest {
         assertEquals("Hi.", turn.bestText)
         assertEquals(4.5, (StreamingMessageParser.parse("""{"type":"Termination","audio_duration_seconds":4.5,"session_duration_seconds":6}""") as TerminationMessage).audioDurationSeconds, 0.0)
         assertEquals("bad key", (StreamingMessageParser.parse("""{"error":"bad key"}""") as ErrorMessage).error)
+        assertEquals("Invalid API key", (StreamingMessageParser.parse("""{"type":"Error","error":"Invalid API key"}""") as ErrorMessage).error)
+        assertTrue((StreamingMessageParser.parse("""{"type":"Error","error":{"code":1008}}""") as ErrorMessage).error!!.contains("1008"))
+        assertEquals("unknown error", (StreamingMessageParser.parse("""{"type":"Error"}""") as ErrorMessage).error)
         assertNull(StreamingMessageParser.parse("""{"type":"SpeechStarted"}"""))
     }
 }
@@ -281,6 +284,18 @@ class InsertionTextFormatterTest {
             Triple("", "x", ""),
         )
         for ((text, tail, expected) in cases) assertEquals("$text after $tail", expected, InsertionTextFormatter.apply(text, tail))
+    }
+
+    @Test
+    fun directInsertVerification() {
+        // Replacing a selection with identical words leaves the field unchanged but is still a success (no paste).
+        assertTrue(InsertionTextFormatter.directInsertApplied("hello", "hello", "hello"))
+        assertTrue(InsertionTextFormatter.directInsertApplied("", "Hi there.", "Hi there."))
+        // An app that normalises the text it is given still counts.
+        assertTrue(InsertionTextFormatter.directInsertApplied("", "hi there", "Hi there"))
+        // Ignored action: unchanged field, different expectation -> paste instead.
+        assertFalse(InsertionTextFormatter.directInsertApplied("abc", "abc def", "abc"))
+        assertFalse(InsertionTextFormatter.directInsertApplied("abc", "abc def", null))
     }
 
     @Test

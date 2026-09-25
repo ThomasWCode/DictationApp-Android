@@ -102,8 +102,7 @@ class AccessibilityBridge(
                 )
                 delay(80)
                 node.refresh()
-                val after = FieldInspector.readableText(node)
-                if (after != null && after != current) {
+                if (InsertionTextFormatter.directInsertApplied(current, newText, FieldInspector.readableText(node))) {
                     formatter.remember(key, formatted)
                     return@withContext InsertionResult(InsertionOutcome.Inserted, null, formatted)
                 }

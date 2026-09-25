@@ -367,6 +367,15 @@ class DictationOrchestratorTest {
 
     private fun waitForState(state: DictationState) = waitFor("state $state") { orchestrator.state == state }
 
+    /**
+     * Arming is entered as soon as the press is dispatched, but the session job attaches the frame handler and
+     * starts the microphone a moment later; frames emitted before that would be dropped.
+     */
+    private fun waitForArmed() {
+        waitForState(DictationState.Arming)
+        waitFor("microphone started") { capture.running }
+    }
+
     private fun waitForIdleSession() {
         waitFor("idle") { orchestrator.state == DictationState.Idle }
         runBlocking { orchestrator.currentSessionJob?.join() }
@@ -375,7 +384,7 @@ class DictationOrchestratorTest {
     private fun dictate(text: String, handsFree: Boolean = false) {
         orchestrator.press()
         if (handsFree) orchestrator.enterHandsFree()
-        waitForState(DictationState.Arming)
+        waitForArmed()
         capture.emit(1)
         transcriber.completeConnect()
         waitForState(DictationState.Recording)
@@ -389,8 +398,7 @@ class DictationOrchestratorTest {
     fun holdInsertsCleanedTextAndRecordsHistory() {
         start()
         orchestrator.press()
-        waitForState(DictationState.Arming)
-        assertTrue(capture.running)
+        waitForArmed()
         waitFor("hub arming") { hub.current.state == DictationState.Arming }
 
         // Audio captured before the socket is ready must be buffered, not lost.
@@ -444,7 +452,7 @@ class DictationOrchestratorTest {
     fun releaseBeforeBeginWaitsForTheConnectionThenFlushes() {
         start()
         orchestrator.press()
-        waitForState(DictationState.Arming)
+        waitForArmed()
         capture.emit(1)
         capture.emit(2)
         orchestrator.release()
@@ -477,7 +485,7 @@ class DictationOrchestratorTest {
     fun silentCancelLeavesNoBadge() {
         start()
         orchestrator.press()
-        waitForState(DictationState.Arming)
+        waitForArmed()
         orchestrator.cancel(silent = true)
         waitForIdleSession()
         assertNull(hub.current.badge)
@@ -508,7 +516,7 @@ class DictationOrchestratorTest {
     fun connectFailureKeepsAudioAndRecordsFailed() {
         start()
         orchestrator.press()
-        waitForState(DictationState.Arming)
+        waitForArmed()
         capture.emit(1)
         transcriber.failConnect(IOException("no network"))
         waitForIdleSession()
@@ -518,6 +526,37 @@ class DictationOrchestratorTest {
         assertTrue(sink.completed)
         assertTrue(notifier.toasts.any { it.first == "Network error" })
         assertEquals("Failed", hub.current.badge)
+    }
+
+    @Test
+    fun failureWithoutAudioKeepsThePartialTranscript() {
+        settings.update { it.copy(storeAudio = false) }
+        start()
+        orchestrator.press()
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        capture.emit(1)
+        transcriber.raiseTurn(0, "Half a sentence", endOfTurn = false)
+        transcriber.onFault?.invoke(IOException("socket dropped"))
+        waitForIdleSession()
+        val record = history.records.single()
+        assertEquals(RecordStatus.Failed, record.status)
+        assertEquals("Half a sentence", record.rawTranscript)
+        assertNull(record.audioPath)
+        assertTrue(sinks.isEmpty())
+        assertTrue(notifier.toasts.any { it.second.contains("saved in History") })
+    }
+
+    @Test
+    fun failureWithNeitherAudioNorWordsOnlyToasts() {
+        settings.update { it.copy(storeAudio = false) }
+        start()
+        orchestrator.press()
+        waitForArmed()
+        transcriber.failConnect(IOException("no network"))
+        waitForIdleSession()
+        assertTrue(history.records.isEmpty())
+        assertTrue(notifier.toasts.any { it.first == "Dictation failed" })
     }
 
     @Test

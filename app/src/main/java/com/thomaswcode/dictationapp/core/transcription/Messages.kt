@@ -4,8 +4,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /** Server -> client messages of the AssemblyAI streaming v3 protocol. */
 sealed interface StreamingMessage
@@ -63,11 +63,15 @@ object StreamingMessageParser {
     /** Returns a typed message, or null for message types we do not model (e.g. SpeechStarted). */
     fun parse(text: String): StreamingMessage? {
         val root = json.parseToJsonElement(text) as? JsonObject ?: return null
-        if (root.containsKey("error") && !root.containsKey("type")) {
-            return json.decodeFromJsonElement(ErrorMessage.serializer(), root)
+        val type = (root["type"] as? JsonPrimitive)?.contentOrNull
+        // Errors arrive both untyped ({"error": ...}) and typed ({"type":"Error","error": ...}); either must fail fast
+        // rather than leave the session waiting for a timeout.
+        if (root.containsKey("error") || type.equals("Error", ignoreCase = true)) {
+            val detail = root["error"] ?: root["message"]
+            return ErrorMessage((detail as? JsonPrimitive)?.contentOrNull ?: detail?.toString() ?: "unknown error")
         }
 
-        return when (root["type"]?.jsonPrimitive?.contentOrNull) {
+        return when (type) {
             "Begin" -> json.decodeFromJsonElement(BeginMessage.serializer(), root)
             "Turn" -> json.decodeFromJsonElement(TurnMessage.serializer(), root)
             "Termination" -> json.decodeFromJsonElement(TerminationMessage.serializer(), root)

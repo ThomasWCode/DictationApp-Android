@@ -90,7 +90,7 @@ class BubbleView(context: Context) : View(context) {
         super.onLayout(changed, left, top, right, bottom)
         // The bubble lives on the screen edge, inside the back-gesture zone: without this, dragging it sideways
         // also fires Back and closes the keyboard.
-        systemGestureExclusionRects = listOf(Rect(0, 0, right - left, bottom - top))
+        if (changed) systemGestureExclusionRects = listOf(Rect(0, 0, right - left, bottom - top))
     }
 
     override fun onDraw(canvas: Canvas) {

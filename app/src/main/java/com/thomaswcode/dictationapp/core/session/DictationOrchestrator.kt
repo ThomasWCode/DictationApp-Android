@@ -466,6 +466,12 @@ class DictationOrchestrator(
                     notifier.toast("Dictation failed", "$message The recording is saved in History.", ToastKind.Warning)
                 }
             }
+            // No audio ("Store audio" off, or nothing recorded) but some words were heard: keep them in History,
+            // where they can still be copied. Retry needs audio, so it stays unavailable for this record.
+            record.rawTranscript.isNotBlank() -> {
+                saveRecord(record)
+                notifier.toast("Dictation failed", "$message What was heard so far is saved in History.", ToastKind.Warning)
+            }
             else -> notifier.toast("Dictation failed", message, ToastKind.Error)
         }
 

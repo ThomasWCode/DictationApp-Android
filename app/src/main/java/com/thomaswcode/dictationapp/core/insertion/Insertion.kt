@@ -119,6 +119,15 @@ class InsertionTextFormatter(
             return if (needsSpace) " $s" else s
         }
 
+        /**
+         * Whether a direct (SET_TEXT) insertion took effect, judged from the field read back afterwards. The field
+         * now holding [expected] is success even when that equals [before] (dictating the same words over a
+         * selection of them); otherwise any change counts, since some apps normalise the text they are given.
+         * An unchanged field means the app ignored the action and the text should be pasted instead.
+         */
+        fun directInsertApplied(before: String, expected: String, after: String?): Boolean =
+            after != null && (after == expected || after != before)
+
         /** A space after the insertion when it would otherwise run into the next word. */
         fun trailingFor(inserted: String, nextChar: Char?): String =
             if (nextChar != null && nextChar.isLetterOrDigit() && inserted.isNotEmpty() && !inserted.last().isWhitespace()) " " else ""

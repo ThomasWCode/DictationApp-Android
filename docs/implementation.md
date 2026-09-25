@@ -32,7 +32,8 @@ app/src/debug/ DebugReceiver (adb hooks)
 
 Each Windows class became a Kotlin file with the same responsibilities and constants. Differences worth knowing:
 
-- **Regexes** use `(?iU)` so `\w` and `\b` are Unicode-aware like .NET's. The "scratch that" marker is a
+- **Regexes** use `(?i)` only: Android's ICU engine rejects `(?U)` (its `\w` and `\b` are Unicode-aware
+  already), and named groups are avoided; a unit test scans the sources for both. The "scratch that" marker is a
   private-use character rather than the word `SCRATCH`, so dictated text can never collide with it.
 - **Settings** are an immutable `@Serializable data class`; `update { it.copy(...) }` replaces the Windows
   `Clone()` + mutate pattern. Writes are temp-file-then-rename; a corrupt file is renamed `.corrupt-<time>` and
@@ -52,7 +53,9 @@ Each Windows class became a Kotlin file with the same responsibilities and const
   window), `flagReportViewIds` (browser address bars), `canRetrieveWindowContent`. No package filter.
 - Every relevant event schedules an evaluation, debounced by 80 ms: the keyboard's top edge comes from the
   `TYPE_INPUT_METHOD` window's bounds, the field from `findFocus(FOCUS_INPUT)` (ignoring fields inside the keyboard
-  itself), and `FieldInspector` rules out non-editable, password and numeric fields.
+  itself; for Compose, whose host View reports the focus, the focused editable virtual node underneath), and
+  `FieldInspector` rules out non-editable, password and numeric fields. Each change of decision is logged at debug
+  level ("Bubble: eligible=…").
 - `AccessibilityBridge` is the orchestrator's `ForegroundContextProvider` and `TextInserter`. Capture records the
   package, app label, window title and the browser URL (address bar by view id, last value cached per browser).
   Insertion runs on the main thread: read the text and selection (treating hint text as empty), format the
@@ -80,5 +83,5 @@ made the communication device for the duration of the dictation.
 
 ## Tests
 
-`./gradlew testDebugUnitTest`: 99 tests (see decisions.md). Robolectric runs the history repository against
+`./gradlew testDebugUnitTest`: 102 tests (see decisions.md). Robolectric runs the history repository against
 Android's SQLite with FTS4 and exercises the retention pass on real files.

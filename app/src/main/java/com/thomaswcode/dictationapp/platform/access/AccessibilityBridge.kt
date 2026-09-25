@@ -126,7 +126,24 @@ class AccessibilityBridge(
     fun focusedField(svc: AccessibilityService): AccessibilityNodeInfo? {
         val focus = runCatching { svc.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull() ?: return null
         if (focus.window?.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return null
-        return focus
+        if (FieldInspector.isEditableField(focus)) return focus
+        // Jetpack Compose (and some custom views) report their host View as input-focused; the real text field
+        // is a focused, editable virtual node underneath it.
+        return focusedEditableDescendant(focus) ?: focus
+    }
+
+    private fun focusedEditableDescendant(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < MAX_FOCUS_SEARCH_NODES) {
+            val node = queue.removeFirst()
+            visited++
+            if (node !== root && node.isFocused && FieldInspector.isEditableField(node)) return node
+            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::addLast)
+        }
+
+        return null
     }
 
     fun appLabel(svc: AccessibilityService, packageName: String): String {
@@ -163,6 +180,8 @@ class AccessibilityBridge(
     }
 
     companion object {
+        private const val MAX_FOCUS_SEARCH_NODES = 600
+
         val URL_BAR_IDS: Map<String, List<String>> = mapOf(
             "com.android.chrome" to listOf("com.android.chrome:id/url_bar"),
             "com.chrome.beta" to listOf("com.chrome.beta:id/url_bar"),

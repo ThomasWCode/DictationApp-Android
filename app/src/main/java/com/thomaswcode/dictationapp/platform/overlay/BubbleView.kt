@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
 import android.view.View
@@ -85,6 +86,13 @@ class BubbleView(context: Context) : View(context) {
         setMeasuredDimension((contentWidth + 2 * pad).toInt(), (diameter + 2 * pad).toInt())
     }
 
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        // The bubble lives on the screen edge, inside the back-gesture zone: without this, dragging it sideways
+        // also fires Back and closes the keyboard.
+        systemGestureExclusionRects = listOf(Rect(0, 0, right - left, bottom - top))
+    }
+
     override fun onDraw(canvas: Canvas) {
         if (diameter <= 0f) return
         val d = diameter
@@ -98,6 +106,10 @@ class BubbleView(context: Context) : View(context) {
             Mode.Idle, Mode.Offline -> {
                 fill.color = if (mode == Mode.Offline) GREY else DARK
                 canvas.drawCircle(pad + d / 2, cy, d / 2, fill)
+                // A faint light rim keeps the dark bubble visible over dark apps.
+                stroke.color = RIM
+                stroke.strokeWidth = d * 0.035f
+                canvas.drawCircle(pad + d / 2, cy, d / 2 - stroke.strokeWidth / 2, stroke)
                 drawMic(canvas, pad + d / 2, cy, d, if (mode == Mode.Offline) 0x99FFFFFF.toInt() else WHITE)
             }
             Mode.Recording -> {
@@ -218,6 +230,7 @@ class BubbleView(context: Context) : View(context) {
         const val AMBER = 0xFFF5A524.toInt()
         const val WHITE = 0xFFFFFFFF.toInt()
         private const val SHADOW = 0x55000000
+        private const val RIM = 0x40FFFFFF
         private const val PAD_FRACTION = 0.2f
         private const val PILL_FACTOR = 3.1f
         private const val BAR_COUNT = 5

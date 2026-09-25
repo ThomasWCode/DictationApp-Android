@@ -37,6 +37,7 @@ class DictationAccessibilityService : AccessibilityService() {
     private var bubble: BubbleController? = null
     private var scope: CoroutineScope? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastDecision: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -119,6 +120,12 @@ class DictationAccessibilityService : AccessibilityService() {
             !FieldInspector.isNumeric(focus) &&
             pkg !in s.hiddenInPackages &&
             (keyboardTop != null || !s.bubbleOnlyWithKeyboard)
+        val decision = "eligible=$eligible pkg=$pkg field=${focus?.className} editable=${focus?.isEditable} keyboardTop=$keyboardTop"
+        if (decision != lastDecision) {
+            lastDecision = decision
+            g.logger.debug("Bubble: $decision")
+        }
+
         controller.update(BubbleController.Anchor(eligible, keyboardTop, pkg))
     }
 

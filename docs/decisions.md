@@ -34,10 +34,28 @@ Choices made while porting DictationApp to Android (2026-09-25), with the reason
 | Retention and orphan sweep | Startup + hourly, orphans older than 30 minutes | Same schedule as Windows; the grace period protects a WAV that is being recorded. |
 | Race between a new press and a finishing session | The idle hand-over and a new press are serialised by a lock; a session only returns the orchestrator to Idle if it still owns it | On Windows the old session's clean-up could, in principle, publish Idle over a session that had just started; closing that window was cheap. |
 
+## Findings from on-device testing (Galaxy S24, Android 16, Gboard, 2026-09-25)
+
+| Finding | Fix |
+|---|---|
+| The bubble never appeared in Jetpack Compose text fields: `findFocus(FOCUS_INPUT)` returns the host `AndroidComposeView` (a plain, non-editable `View`), not the text field. This affects every Compose app, DictationApp itself included. | When the input-focused node is not editable, search its subtree (up to 600 nodes) for a focused, editable virtual node. |
+| The first real dictation crashed the process: Android's regex engine is ICU-based and rejects the `(?U)` flag that the JVM accepts, so every JVM test had passed. The `ExceptionInInitializerError` was an `Error`, not an `Exception`, so it escaped the session's error handling. | `(?i)` only (ICU's `\w` and `\b` are Unicode-aware already); numbered instead of named groups; a `CoroutineExceptionHandler` on the app scope; and a unit test that scans the sources for both constructs. |
+| Dragging the bubble sideways from the screen edge also fired the system Back gesture, which closed the keyboard (and so hid the bubble). | `systemGestureExclusionRects` over the bubble. |
+| The dark idle bubble was hard to see over dark apps. | A faint light rim. |
+
+Verified on the device: the bubble appears above Gboard in a Compose field and in Chrome's address bar, and hides
+when the keyboard closes; a full dictation (AssemblyAI connect 943 ms, handshake 982 ms, Groq gpt-oss-120b cleanup
+692 ms) typed "So I think we should ship the new version on Tuesday. What do you think?" from "Um, so I think we
+should... We should ship the new version on Monday, no? Tuesday. What do you think?"; tap → hands-free pill → ✕
+discards; hold → release finalises ("Nothing heard" in a silent room); drag snaps to either edge and remembers its
+height; drop on the target snoozes and "Show now" restores; History lists, shows details and plays audio. Chrome's
+address bar took the text through the direct path (no clipboard).
+
 ## Testing notes
 
-- 99 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
+- 102 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O, state machine),
   the LLM client against MockWebServer (fallback chain, 401 stop, validation, per-attempt and total timeouts),
-  fourteen orchestrator scenarios with in-memory fakes, and the SQLite/FTS4 history under Robolectric.
+  fourteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the
+  Android regex-compatibility scan.
 - The accessibility, overlay and microphone code needs a device; see `manual-test-checklist.md`.

@@ -21,6 +21,7 @@ import com.thomaswcode.dictationapp.platform.KeystoreSecretStore
 import com.thomaswcode.dictationapp.platform.SqliteHistoryRepository
 import com.thomaswcode.dictationapp.platform.access.AccessibilityBridge
 import com.thomaswcode.dictationapp.platform.audio.AndroidAudioCaptureFactory
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,7 +64,10 @@ class AppGraph(val app: Application) {
 
     /** Epoch millis until which the bubble is hidden (dragged onto the "Hide 10 min" target). */
     val snoozedUntil = MutableStateFlow(0L)
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** An unexpected error in one dictation is logged instead of taking the bubble down with the process. */
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> logger.error("Unhandled error in a background task", e) },
+    )
 
     val orchestrator = DictationOrchestrator(
         captures = AndroidAudioCaptureFactory(app, logger),

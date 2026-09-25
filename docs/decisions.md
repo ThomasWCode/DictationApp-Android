@@ -31,6 +31,8 @@ Choices made while porting DictationApp to Android (2026-09-25), with the reason
 | Opacity | Applies while idle; fully opaque while dictating | A faint bubble is fine to glance past, but the recording state must be unmistakable. |
 | Offline | Grey bubble; a dictation fails fast with a toast | Matches Wispr Flow; the Windows Retry path handles recordings saved after a mid-dictation network failure. |
 | Remember style changes | Dropped | It needs the Flow bar chips or arrow keys, which do not exist here; defaults and app rules cover the same need. |
+| Failed dictations in History | Saved when there is audio (Retry) or any words were heard (to copy); a failure with neither only toasts | Windows saved only failures with audio. With "Store audio" off that dropped the partial transcript, so the words heard are kept too (Codex review). |
+| Minimum Android version quirks | Bluetooth mics use `setCommunicationDevice` on 12+ and the legacy SCO switch on 11; `lintDebug` checks NewApi | minSdk is 30 but the audio routing API is 31 (Codex review). |
 | Retention and orphan sweep | Startup + hourly, orphans older than 30 minutes | Same schedule as Windows; the grace period protects a WAV that is being recorded. |
 | Race between a new press and a finishing session | The idle hand-over and a new press are serialised by a lock; a session only returns the orchestrator to Idle if it still owns it | On Windows the old session's clean-up could, in principle, publish Idle over a session that had just started; closing that window was cheap. |
 
@@ -53,9 +55,9 @@ address bar took the text through the direct path (no clipboard).
 
 ## Testing notes
 
-- 102 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
+- 105 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O, state machine),
   the LLM client against MockWebServer (fallback chain, 401 stop, validation, per-attempt and total timeouts),
-  fourteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the
+  sixteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the
   Android regex-compatibility scan.
 - The accessibility, overlay and microphone code needs a device; see `manual-test-checklist.md`.

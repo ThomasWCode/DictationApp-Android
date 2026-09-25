@@ -100,7 +100,7 @@ fun SettingsScreen(nav: NavHostController) {
             NavRow(Icons.Rounded.RadioButtonChecked, "Bubble", "Size ${s.bubbleSizePercent}% · opacity ${s.bubbleOpacityPercent}% · ${s.bubbleSide.name.lowercase()} edge") { nav.navigate(Routes.BUBBLE) }
             NavRow(Icons.Rounded.Style, "Style", "${s.defaultTone} tone · ${s.defaultCleanupLevel} cleanup by default") { nav.navigate(Routes.STYLE) }
             NavRow(Icons.AutoMirrored.Rounded.MenuBook, "Dictionary", "${s.dictionary.size} term${if (s.dictionary.size == 1) "" else "s"}") { nav.navigate(Routes.DICTIONARY) }
-            NavRow(Icons.Rounded.Apps, "App rules", "${s.appRules.count { it.enabled }} active rules for tone and cleanup per app") { nav.navigate(Routes.RULES) }
+            NavRow(Icons.Rounded.Apps, "App rules", s.appRules.count { it.enabled }.let { n -> if (n == 0) "None: every app uses your defaults" else "$n app${if (n == 1) "" else "s"} with their own settings" }) { nav.navigate(Routes.RULES) }
         }
 
         SectionHeader("Services")
@@ -559,7 +559,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             RadioRow(InsertMethod.Direct, s.insertMethod, "Type into the field (recommended)", "Writes at the cursor and leaves your clipboard alone. Falls back to pasting when a field ignores it; web pages always paste.") { v -> graph.settings.update { it.copy(insertMethod = v) } }
             RadioRow(InsertMethod.Paste, s.insertMethod, "Paste through the clipboard", "Keeps rich-text formatting. Android does not allow restoring the previous clipboard afterwards.") { v -> graph.settings.update { it.copy(insertMethod = v) } }
         }
-        Hint("App rules can choose a different method per app (Gmail, Outlook, Word and Docs paste by default).")
+        Hint("App rules can choose a different method for an app, e.g. Paste for Gmail or Word to keep their formatting.")
 
         SectionHeader("Limits")
         Panel {

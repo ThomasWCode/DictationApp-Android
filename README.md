@@ -14,7 +14,8 @@ it (or hold it) and speak: your words are transcribed by AssemblyAI, cleaned up 
   - Hidden in password, PIN, number and phone fields, and in any app you list.
 - **Same pipeline and settings as Windows**: AssemblyAI Universal-3.5 Pro streaming with the personal dictionary
   as key terms; Groq cleanup (None/Light/Medium/High) and tone (Neutral/Formal/Casual) with the same prompt, fallback
-  chain and output validation; app rules per app package or website (Gmail formal, WhatsApp casual…).
+  chain and output validation; optional app rules per app package or website (none by default: every app follows your defaults until you
+  add it, e.g. Gmail formal or WhatsApp casual).
 - **History**: searchable, with audio playback, Copy, Insert, Retry (failed dictations), Undo AI edit, Delete,
   retention settings and a cost estimate. **Correct last dictation** turns your fixes into dictionary terms.
 
@@ -48,7 +49,7 @@ Requirements: JDK 17 (Android Studio's bundled JDK 21 also works) and the Androi
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot"
-.\gradlew testDebugUnitTest      # 105 JVM/Robolectric tests
+.\gradlew testDebugUnitTest      # 109 JVM/Robolectric tests
 .\gradlew assembleDebug          # app\build\outputs\apk\debug\app-debug.apk
 ```
 

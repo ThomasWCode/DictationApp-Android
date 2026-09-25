@@ -25,7 +25,7 @@ Choices made while porting DictationApp to Android (2026-09-25), with the reason
 | Tap vs hold | Both work all the time, like the Windows hold and double-tap. A press becomes a dictation after 150 ms without movement; a release before 300 ms is a tap (hands-free); later is a hold (insert on release). | 150 ms separates a press from the start of a drag, so dragging never opens the microphone. 300 ms is the Windows tap threshold. The first 150 ms of audio is not captured, but nobody speaks that quickly after touching the screen. |
 | A short tap cancels on Windows | On Android a tap starts hands-free | Wispr Flow's tap mode. The state machine therefore has no short-tap cancel: Release in Arming always finalises. |
 | Discarding | ✕ on the hands-free pill; slide away before releasing in hold mode | There is no Escape key; slide-to-cancel is the familiar voice-message gesture. |
-| Insertion method | Splice at the cursor with `ACTION_SET_TEXT` and verify, paste as fallback; web content always pastes; Gmail, Outlook, Word and Docs paste by rule | Android cannot restore the clipboard afterwards (background reads are blocked), so the direct method avoids clobbering it. Replacing the whole text of a rich editor drops its formatting, hence Paste for those apps; `SET_TEXT` on web inputs may not behave as a real edit, hence paste there. |
+| Insertion method | Splice at the cursor with `ACTION_SET_TEXT` and verify, paste as fallback; web content always pastes; an app rule can choose Paste (e.g. for Gmail, Word) | Android cannot restore the clipboard afterwards (background reads are blocked), so the direct method avoids clobbering it. Replacing the whole text of a rich editor drops its formatting, so Paste is the better per-app choice there; `SET_TEXT` on web inputs may not behave as a real edit, hence paste there. |
 | Spacing | Read the character before and after the cursor | Unlike Windows, Android exposes the field's text and selection, which is more reliable than remembering the last insertion. The Windows memory is still used where the text is unreadable. |
 | When the bubble shows | Editable field + keyboard open, not secret/numeric, not in a hidden app | Wispr Flow's rules. Numeric and phone fields are excluded because dictation makes no sense there. |
 | Opacity | Applies while idle; fully opaque while dictating | A faint bubble is fine to glance past, but the recording state must be unmistakable. |
@@ -35,6 +35,12 @@ Choices made while porting DictationApp to Android (2026-09-25), with the reason
 | Minimum Android version quirks | Bluetooth mics use `setCommunicationDevice` on 12+ and the legacy SCO switch on 11; `lintDebug` checks NewApi | minSdk is 30 but the audio routing API is 31 (Codex review). |
 | Retention and orphan sweep | Startup + hourly, orphans older than 30 minutes | Same schedule as Windows; the grace period protects a WAV that is being recorded. |
 | Race between a new press and a finishing session | The idle hand-over and a new press are serialised by a lock; a session only returns the orchestrator to Idle if it still owns it | On Windows the old session's clean-up could, in principle, publish Idle over a session that had just started; closing that window was cheap. |
+
+## Changes requested after the first delivery (2026-09-25)
+
+| Request | Decision | Why |
+|---|---|---|
+| "Per-app settings should start empty, with all apps obeying the general settings; apps can then be added" | `appRules` defaults to an empty list. The 0.1.0 seed is kept as `LegacyAppRules` only for the schema-2 migration, which removes every rule whose target was seeded and keeps rules for other apps, then saves. The App rules screen explains the empty default; **Add app** opens the installed-app picker and starts the rule from the current defaults; **Add website** does the same for a host; "Reset to defaults" became **Remove all**. The Windows app got the same change. | The seeded rules decided tone, cleanup and insertion for Gmail, WhatsApp and others without the user choosing them. Consequence: Gmail, Outlook, Word and Docs now use the default insertion method (type directly), which can drop rich-text formatting there; adding those apps with Insertion = Paste restores the old behaviour, and the App rules screen says so. |
 
 ## Findings from on-device testing (Galaxy S24, Android 16, Gboard, 2026-09-25)
 
@@ -55,7 +61,7 @@ address bar took the text through the direct path (no clipboard).
 
 ## Testing notes
 
-- 105 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
+- 109 JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O, state machine),
   the LLM client against MockWebServer (fallback chain, 401 stop, validation, per-attempt and total timeouts),
   sixteen orchestrator scenarios with in-memory fakes, the SQLite/FTS4 history under Robolectric, and the

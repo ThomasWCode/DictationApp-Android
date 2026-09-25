@@ -13,7 +13,7 @@ import com.thomaswcode.dictationapp.core.insertion.InsertMethod
 import com.thomaswcode.dictationapp.core.insertion.InsertionTextFormatter
 import com.thomaswcode.dictationapp.core.rules.AppRule
 import com.thomaswcode.dictationapp.core.rules.AppRulesResolver
-import com.thomaswcode.dictationapp.core.rules.DefaultAppRules
+import com.thomaswcode.dictationapp.core.rules.LegacyAppRules
 import com.thomaswcode.dictationapp.core.transcription.BeginMessage
 import com.thomaswcode.dictationapp.core.transcription.ErrorMessage
 import com.thomaswcode.dictationapp.core.transcription.SessionOptions
@@ -147,11 +147,28 @@ class SessionOptionsAndParserTest {
 class AppRulesResolverTest {
     private fun ctx(pkg: String, url: String? = null) = ForegroundContext(1, pkg, pkg, "title", url, true, false, "test")
 
-    private fun resolve(c: ForegroundContext, rules: List<AppRule> = DefaultAppRules.seed(), insert: InsertMethod = InsertMethod.Direct) =
+    private fun resolve(c: ForegroundContext, rules: List<AppRule> = LegacyAppRules.seed(), insert: InsertMethod = InsertMethod.Direct) =
         AppRulesResolver.resolve(c, rules, Tone.Neutral, CleanupLevel.Light, insert)
 
     @Test
-    fun seedRulesGiveExpectedTones() {
+    fun newSettingsHaveNoRulesSoEveryAppUsesTheDefaults() {
+        val settings = com.thomaswcode.dictationapp.core.settings.AppSettings()
+        assertTrue(settings.appRules.isEmpty())
+        val r = AppRulesResolver.resolve(ctx("com.google.android.gm"), settings.appRules, Tone.Casual, CleanupLevel.High, InsertMethod.Direct)
+        assertEquals(Tone.Casual, r.tone)
+        assertEquals(CleanupLevel.High, r.level)
+        assertEquals("default", r.matchedBy)
+    }
+
+    @Test
+    fun legacySeededTargetsAreRecognisedWhateverTheirStyle() {
+        assertTrue(LegacyAppRules.isSeededTarget(AppRule(packageGlob = "COM.WHATSAPP", tone = Tone.Formal)))
+        assertTrue(LegacyAppRules.isSeededTarget(AppRule(urlHost = "mail.google.com")))
+        assertFalse(LegacyAppRules.isSeededTarget(AppRule(packageGlob = "com.example.notes")))
+    }
+
+    @Test
+    fun legacySeedRulesResolveAsBefore() {
         assertEquals(Tone.Formal, resolve(ctx("com.google.android.gm")).tone)
         assertEquals(InsertMethod.Paste, resolve(ctx("com.google.android.gm")).insertMethod)
         assertEquals(Tone.Casual, resolve(ctx("com.whatsapp")).tone)

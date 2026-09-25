@@ -1,6 +1,7 @@
 package com.thomaswcode.dictationapp.core.settings
 
 import com.thomaswcode.dictationapp.core.Logger
+import com.thomaswcode.dictationapp.core.rules.LegacyAppRules
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,7 +58,10 @@ class JsonSettingsStore(private val file: File, private val logger: Logger) : Se
     private fun load(): AppSettings {
         if (!file.exists()) return AppSettings()
         return try {
-            json.decodeFromString(AppSettings.serializer(), file.readText())
+            val loaded = json.decodeFromString(AppSettings.serializer(), file.readText())
+            val migrated = migrate(loaded)
+            if (migrated != loaded) runCatching { write(migrated) }.onFailure { logger.warn("Could not save migrated settings", it) }
+            migrated
         } catch (e: Exception) {
             if (e !is SerializationException && e !is IOException && e !is IllegalArgumentException) throw e
             val stamp = SimpleDateFormat("yyyyMMddHHmmss", Locale.ROOT).format(Date())
@@ -66,6 +70,21 @@ class JsonSettingsStore(private val file: File, private val logger: Logger) : Se
             runCatching { file.renameTo(backup) }
             AppSettings()
         }
+    }
+
+    /**
+     * Schema 2: app rules start empty and every app follows the Style defaults. The rules 0.1.0 seeded (Gmail formal,
+     * WhatsApp casual, ...) are removed even if edited since; rules for any other app were added by the user and stay.
+     */
+    private fun migrate(settings: AppSettings): AppSettings {
+        var s = settings
+        if (s.schemaVersion < 2) {
+            val kept = s.appRules.filterNot(LegacyAppRules::isSeededTarget)
+            logger.info("Migrated settings to schema 2: removed ${s.appRules.size - kept.size} seeded app rules, kept ${kept.size}")
+            s = s.copy(appRules = kept, schemaVersion = 2)
+        }
+
+        return s
     }
 
     companion object {

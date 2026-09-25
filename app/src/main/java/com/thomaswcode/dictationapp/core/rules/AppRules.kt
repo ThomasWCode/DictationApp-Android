@@ -99,10 +99,20 @@ object AppRulesResolver {
     }
 }
 
-object DefaultAppRules {
+/**
+ * The rules version 0.1.0 seeded into every new settings file. The list now starts empty and every app follows
+ * the Style defaults; these are kept only so the settings migration can recognise and remove them.
+ */
+object LegacyAppRules {
     private const val EMAIL = "This is an email."
     private const val CHAT = "This is a chat message."
     private const val DOCUMENT = "This is a document."
+
+    /** True when [rule] targets an app or host that was seeded, whatever its style is now. */
+    fun isSeededTarget(rule: AppRule): Boolean = seed().any { seed ->
+        seed.packageGlob?.trim().equals(rule.packageGlob?.trim(), ignoreCase = true) &&
+            seed.urlHost?.trim().equals(rule.urlHost?.trim(), ignoreCase = true)
+    }
 
     fun seed(): List<AppRule> = listOf(
         // Rich-text editors lose formatting (links, signatures) when their whole text is replaced, so they paste.

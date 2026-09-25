@@ -6,7 +6,6 @@ import com.thomaswcode.dictationapp.core.dictionary.DictionaryTerm
 import com.thomaswcode.dictationapp.core.history.RetentionPolicy
 import com.thomaswcode.dictationapp.core.insertion.InsertMethod
 import com.thomaswcode.dictationapp.core.rules.AppRule
-import com.thomaswcode.dictationapp.core.rules.DefaultAppRules
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -19,7 +18,7 @@ enum class BubbleSide { Left, Right }
  */
 @Serializable
 data class AppSettings(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = CURRENT_SCHEMA,
 
     /** AssemblyAI key (transcription), encrypted with an Android Keystore key. Never the plaintext. */
     val apiKeyProtected: String? = null,
@@ -75,7 +74,8 @@ data class AppSettings(
     val hiddenInPackages: List<String> = emptyList(),
 
     val dictionary: List<DictionaryTerm> = emptyList(),
-    val appRules: List<AppRule> = DefaultAppRules.seed(),
+    /** Per-app overrides. Empty by default: every app follows the Style defaults until the user adds one. */
+    val appRules: List<AppRule> = emptyList(),
 ) {
     val hasApiKey: Boolean get() = !apiKeyProtected.isNullOrEmpty()
 
@@ -84,6 +84,8 @@ data class AppSettings(
     val maxDictationMs: Long get() = maxDictationMinutes.coerceIn(1, 180) * 60_000L
 
     companion object {
+        /** 2: app rules start empty; the rules 0.1.0 seeded are removed on upgrade. */
+        const val CURRENT_SCHEMA = 2
         const val SPEECH_MODEL_PRO = "universal-3-5-pro"
         const val SPEECH_MODEL_STANDARD = "universal-streaming"
         const val DEFAULT_LLM_BASE_URL = "https://api.groq.com/openai/v1/"

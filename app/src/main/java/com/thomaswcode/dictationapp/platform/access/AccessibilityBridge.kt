@@ -74,32 +74,35 @@ class AccessibilityBridge(
         }
 
         val key = FieldInspector.fieldKey(node)
-        val current = FieldInspector.readableText(node)
-        val formatted: String
-        var selection = 0 to 0
-        if (current != null) {
-            selection = FieldInspector.selection(node, current)
+        var current = FieldInspector.readableText(node)
+        // Read before the placeholder check, which may move the cursor and put it back.
+        var selection = current?.let { FieldInspector.selection(node, it) } ?: (0 to 0)
+        val direct = method == InsertMethod.Direct && FieldInspector.supportsSetText(node) && !FieldInspector.inWebView(node)
+        val placeholder = current != null && FieldInspector.showsPlaceholder(node, current, splicing = direct)
+        if (placeholder) {
+            logger.info("${node.className} in ${node.packageName} reports its placeholder as text; the field is empty")
+            current = ""
+            selection = 0 to 0
+        }
+
+        val formatted = if (current != null) {
             val prev = if (selection.first > 0) current[selection.first - 1].toString() else null
             val body = InsertionTextFormatter.apply(text, prev)
-            formatted = body + InsertionTextFormatter.trailingFor(body, current.getOrNull(selection.second))
+            body + InsertionTextFormatter.trailingFor(body, current.getOrNull(selection.second))
         } else {
-            formatted = formatter.format(text, key)
+            formatter.format(text, key)
         }
 
         // Direct: splice the text in at the cursor. Verified by reading the field back; a field that ignores
-        // SET_TEXT (custom editors) is left untouched and gets a paste instead.
-        if (method == InsertMethod.Direct && current != null && FieldInspector.supportsSetText(node) && !FieldInspector.inWebView(node)) {
+        // SET_TEXT (custom editors) is left untouched and gets a paste instead. A field that reports a placeholder
+        // as text is pasted into: its real content is hidden (WhatsApp keeps an invisible character there), and a
+        // paste lands at its own cursor without replacing anything.
+        if (direct && current != null && !placeholder) {
             val newText = current.substring(0, selection.first) + formatted + current.substring(selection.second)
             val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText) }
             if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
                 val cursor = selection.first + formatted.length
-                node.performAction(
-                    AccessibilityNodeInfo.ACTION_SET_SELECTION,
-                    Bundle().apply {
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
-                    },
-                )
+                FieldInspector.setSelection(node, cursor, cursor)
                 delay(80)
                 node.refresh()
                 if (InsertionTextFormatter.directInsertApplied(current, newText, FieldInspector.readableText(node))) {

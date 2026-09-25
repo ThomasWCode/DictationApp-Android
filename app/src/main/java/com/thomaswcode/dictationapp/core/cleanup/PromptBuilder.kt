@@ -24,9 +24,12 @@ object PromptBuilder {
         appendLine("   \"one... two... three\", \"point one\") or clearly dictates a list, output a numbered list")
         appendLine("   (\"1. \", \"2. \") or a bullet list (\"- \") with one item per line and no other prose between")
         appendLine("   items. Numbers that are merely mentioned inside a sentence stay in the sentence.")
-        appendLine("   The transcript is punctuated in pieces cut where the speaker paused, so a full stop and capital")
-        appendLine("   letter can fall inside a sentence (\"Typing into the search box. Still adds a space.\" -> \"Typing")
-        appendLine("   into the search box still adds a space.\"): join such fragments into the sentence they belong to.")
+        if (ctx.level != CleanupLevel.None) {
+            // Not at None, which keeps the transcript's wording and punctuation even when a tone runs the LLM.
+            appendLine("   The transcript is punctuated in pieces cut where the speaker paused, so a full stop and capital")
+            appendLine("   letter can fall inside a sentence (\"Typing into the search box. Still adds a space.\" -> \"Typing")
+            appendLine("   into the search box still adds a space.\"): join such fragments into the sentence they belong to.")
+        }
         append("4. Preserve the exact spelling and capitalisation of these terms if present: ")
         appendLine(if (ctx.keyterms.isEmpty()) "(none)" else ctx.keyterms.joinToString(", "))
         append("5. Cleanup level: ").appendLine(levelInstruction(ctx.level))

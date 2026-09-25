@@ -63,6 +63,15 @@ class FieldInspectorTest {
     }
 
     @Test
+    fun `an EditText reporting a cursor holds real text even without cursor actions`() {
+        // A custom accessibility delegate may leave the actions out; the cursor alone proves the text is real.
+        val node = field("Hi Sam", cursor = 6, canMoveCursor = false).apply { className = "android.widget.EditText" }
+
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hi Sam", splicing = true))
+        assertTrue(moves.isEmpty())
+    }
+
+    @Test
     fun `an EditText with real text offers cursor actions and is not taken for a placeholder`() {
         val node = field("Hi Sam", cursor = 6).apply {
             className = "android.widget.EditText"

@@ -61,6 +61,11 @@ Each Windows class became a Kotlin file with the same responsibilities and const
   Insertion runs on the main thread: read the text and selection (treating hint text as empty), format the
   spacing, `ACTION_SET_TEXT` the spliced text, move the cursor with `ACTION_SET_SELECTION`, wait 80 ms and read
   back; if unchanged, clipboard + `ACTION_PASTE`; if that is refused, clipboard only.
+- Placeholders reported as text: WhatsApp's empty fields hold one zero-width space and report their placeholder
+  as the text, with no hint text and `isShowingHintText` false. `FieldInspector.showsPlaceholder` checks short,
+  single-line text whose cursor is not at its end in fields that offer `ACTION_SET_SELECTION`: it moves the cursor
+  to the end of the reported text, which a field refuses beyond its real text (TextView and Compose both do), and
+  puts it back when accepted. A placeholder counts as an empty field and is pasted into rather than replaced.
 
 ## Bubble
 

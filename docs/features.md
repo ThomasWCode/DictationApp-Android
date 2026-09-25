@@ -32,6 +32,7 @@ turn → Terminate, capped at 2.5 s).
 |---|---|
 | A normal text field has focus (default "Type into the field") | The text is spliced in at the cursor (replacing any selection) through the accessibility API, then read back to confirm. The clipboard is untouched. |
 | The field ignores that, is web content, or the app rule says Paste | The text is put on the clipboard and pasted. Android does not let a background app read the clipboard, so the previous contents cannot be restored. |
+| An empty field that reports its placeholder as its text (WhatsApp's "Message" box and "Ask Meta AI or Search" bar) | Recognised as empty, so the placeholder is not copied into the text, and pasted at the field's own cursor. |
 | The field accepts neither | The text stays on the clipboard and a toast says so. |
 | No text field has focus, or the focused field is a password | Clipboard only, with a toast. |
 | Focus moved to another field during the dictation | The text goes into the new field; the tone chosen at the start is kept. |

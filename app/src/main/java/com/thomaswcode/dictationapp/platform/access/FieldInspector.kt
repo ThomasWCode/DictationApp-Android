@@ -1,5 +1,6 @@
 package com.thomaswcode.dictationapp.platform.access
 
+import android.os.Bundle
 import android.text.InputType
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
@@ -40,6 +41,40 @@ object FieldInspector {
         return text
     }
 
+    /**
+     * True when [text] could be a placeholder the app did not flag as a hint. WhatsApp's chat box and search bar
+     * hold one invisible character when empty and report "Message" / "Ask Meta AI or Search" as their text.
+     * A cursor already at the end of the reported text proves it is real; long or multi-line text is never a
+     * placeholder; and a field that cannot move its cursor cannot be checked.
+     */
+    fun mayBePlaceholder(node: AccessibilityNodeInfo, text: String): Boolean =
+        text.isNotEmpty() && text.length <= MAX_PLACEHOLDER_LENGTH && '\n' !in text &&
+            node.actionList.contains(AccessibilityAction.ACTION_SET_SELECTION) &&
+            maxOf(node.textSelectionStart, node.textSelectionEnd) < text.length
+
+    /**
+     * Tells a placeholder reported as text from real text. A field only moves its cursor within its real text,
+     * so moving it to the end of [text] is refused for a stand-in and accepted for real text, which then gets
+     * its cursor back. Moves the cursor only when [mayBePlaceholder].
+     */
+    fun showsPlaceholder(node: AccessibilityNodeInfo, text: String): Boolean {
+        if (!mayBePlaceholder(node, text)) return false
+        val start = node.textSelectionStart
+        val end = node.textSelectionEnd
+        if (!setSelection(node, text.length, text.length)) return true
+        if (start >= 0 && end >= 0) setSelection(node, start, end)
+        return false
+    }
+
+    fun setSelection(node: AccessibilityNodeInfo, start: Int, end: Int): Boolean =
+        node.performAction(
+            AccessibilityNodeInfo.ACTION_SET_SELECTION,
+            Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end)
+            },
+        )
+
     /** Selection clamped to the text; a missing selection means "at the end". */
     fun selection(node: AccessibilityNodeInfo, text: String): Pair<Int, Int> {
         val start = node.textSelectionStart
@@ -67,4 +102,7 @@ object FieldInspector {
     /** Identifies a field across dictations for the spacing memory. */
     fun fieldKey(node: AccessibilityNodeInfo): String =
         "${node.packageName}/${node.viewIdResourceName ?: node.className}/${node.windowId}"
+
+    /** Longer than any placeholder; also keeps the cursor still while dictating into the middle of a document. */
+    const val MAX_PLACEHOLDER_LENGTH = 80
 }

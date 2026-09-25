@@ -342,7 +342,9 @@ class BubbleController(
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(confirmPress)
                 if (gesture == Gesture.Pending) {
-                    if (dragging) finishDrag() else if (pressed) orchestrator.release()
+                    // The system took the touch stream away (a gesture, a window change): that is not the user
+                    // letting go, so a held dictation is discarded rather than inserted.
+                    if (dragging) finishDrag() else if (pressed) orchestrator.cancel()
                 }
 
                 gesture = Gesture.None

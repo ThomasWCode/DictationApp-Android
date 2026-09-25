@@ -3,6 +3,7 @@ package com.thomaswcode.dictationapp.debug
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.thomaswcode.dictationapp.DictationApp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,10 +53,12 @@ class DebugReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 graph.scope.launch {
                     try {
+                        // Transcript text goes to logcat only, never to the app's log files.
                         val result = graph.orchestrator.transcribeWav(path, 1.0) { turn ->
-                            log.info("Debug turn ${turn.turnOrder} eot=${turn.endOfTurn} fmt=${turn.turnIsFormatted}: ${turn.bestText}")
+                            Log.i(TAG, "Debug turn ${turn.turnOrder} eot=${turn.endOfTurn} fmt=${turn.turnIsFormatted}: ${turn.bestText}")
                         }
-                        log.info("Debug stream test: connect ${result.connectLatencyMs} ms, audio ${result.audioDurationMs} ms, wall ${result.wallClockMs} ms, text: ${result.text}")
+                        log.info("Debug stream test: connect ${result.connectLatencyMs} ms, audio ${result.audioDurationMs} ms, wall ${result.wallClockMs} ms, ${result.text.length} chars")
+                        Log.i(TAG, "Debug stream test text: ${result.text}")
                     } catch (e: Exception) {
                         log.error("Debug stream test failed", e)
                     } finally {
@@ -67,6 +70,7 @@ class DebugReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        private const val TAG = "DictationApp"
         const val ACTION_SET_KEYS = "com.thomaswcode.dictationapp.debug.SET_KEYS"
         const val ACTION_SIMULATE = "com.thomaswcode.dictationapp.debug.SIMULATE"
         const val ACTION_STREAM_TEST = "com.thomaswcode.dictationapp.debug.STREAM_TEST"

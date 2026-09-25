@@ -110,6 +110,15 @@ class FakeTranscriber(private val autoConnect: Boolean = false, private val auto
 
     @Volatile var shutdownCalled = false
 
+    /** When set, shutdown fails like a socket that dropped during the handshake. */
+    @Volatile var shutdownError: Throwable? = null
+
+    /** When false, shutdown returns no Termination summary. */
+    @Volatile var sendTermination = true
+
+    /** Raise a socket fault after the release, when the session no longer selects on it, then return no summary. */
+    @Volatile var faultBeforeShutdown = false
+
     @Volatile var aborted = false
     override var onTurn: ((TurnMessage) -> Unit)? = null
     override var onFault: ((Throwable) -> Unit)? = null
@@ -129,7 +138,13 @@ class FakeTranscriber(private val autoConnect: Boolean = false, private val auto
 
     override suspend fun shutdown(hardCapMs: Long): TerminationMessage? {
         shutdownCalled = true
-        return TerminationMessage(audioDurationSeconds = 3.0)
+        shutdownError?.let { throw it }
+        if (faultBeforeShutdown) {
+            onFault?.invoke(IOException("socket dropped"))
+            return null
+        }
+
+        return if (sendTermination) TerminationMessage(audioDurationSeconds = 3.0) else null
     }
 
     override fun abort() {
@@ -617,6 +632,56 @@ class DictationOrchestratorTest {
         assertTrue(notifier.toasts.any { it.first == "Microphone blocked" })
         assertTrue(history.records.isEmpty())
         assertFalse(capture.running)
+    }
+
+    @Test
+    fun socketFailureDuringShutdownKeepsAudioAsFailedInsteadOfInserting() {
+        start()
+        orchestrator.press()
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        capture.emit(1)
+        transcriber.raiseTurn(0, "The start of a longer", endOfTurn = false)
+        transcriber.shutdownError = IOException("Streaming connection lost during shutdown")
+        orchestrator.release()
+        waitForIdleSession()
+        assertTrue(inserter.inserted.isEmpty())
+        val record = history.records.single()
+        assertEquals(RecordStatus.Failed, record.status)
+        assertEquals(sink.path, record.audioPath)
+        assertTrue(notifier.toasts.any { it.first == "Network error" })
+    }
+
+    @Test
+    fun faultAfterReleaseWithoutSummaryIsNotInserted() {
+        start()
+        orchestrator.press()
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        capture.emit(1)
+        transcriber.raiseTurn(0, "Cut off", endOfTurn = false)
+        transcriber.faultBeforeShutdown = true
+        orchestrator.release()
+        waitForIdleSession()
+        assertTrue(inserter.inserted.isEmpty())
+        assertEquals(RecordStatus.Failed, history.records.single().status)
+    }
+
+    @Test
+    fun insertMethodFollowsTheAppTheTextLandsIn() {
+        settings.update { it.copy(appRules = listOf(AppRule(packageGlob = "com.google.android.gm", insertMethod = InsertMethod.Paste, tone = Tone.Formal))) }
+        start()
+        orchestrator.press()
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        capture.emit(1)
+        transcriber.raiseTurn(0, "Moved apps.", true, true)
+        context = editable.copy(windowId = 9, packageName = "com.google.android.gm", appLabel = "Gmail")
+        orchestrator.release()
+        waitForIdleSession()
+        // Paste from Gmail's rule; the tone chosen where the dictation started (no WhatsApp rule: default) is kept.
+        assertEquals(InsertMethod.Paste, inserter.inserted.single().second)
+        assertEquals(Tone.Neutral, post.requests.single().tone)
     }
 
     @Test

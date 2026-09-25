@@ -109,7 +109,8 @@ class LlmPostProcessor(
                             val validation = OutputValidator.validate(rawTranscript, parsed.content)
                             if (!validation.isValid) {
                                 lastReason = "$model:invalid-${validation.reason}"
-                                logger.warn("LLM output from $model rejected (${validation.reason}): ${truncate(parsed.content, 200)}")
+                                // Reason and size only: log files outlive the history retention, so no dictated text.
+                                logger.warn("LLM output from $model rejected (${validation.reason}, ${parsed.content?.length ?: 0} chars)")
                                 return@use
                             }
 

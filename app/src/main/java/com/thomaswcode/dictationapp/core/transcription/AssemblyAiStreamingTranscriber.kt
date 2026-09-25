@@ -42,6 +42,9 @@ class AssemblyAiStreamingTranscriber(
 
     @Volatile private var socket: WebSocket? = null
 
+    /** The socket failure, remembered even while closing so shutdown can report a truncated session. */
+    @Volatile private var failure: Throwable? = null
+
     @Volatile override var onTurn: ((TurnMessage) -> Unit)? = null
 
     @Volatile override var onFault: ((Throwable) -> Unit)? = null
@@ -94,7 +97,12 @@ class AssemblyAiStreamingTranscriber(
 
     override suspend fun shutdown(hardCapMs: Long): TerminationMessage? {
         val ws = socket
-        if (ws == null || !open) return null
+        if (ws == null || !open) {
+            // The socket died after the user released: the transcript may be missing its tail.
+            failure?.let { throw IOException("Streaming connection lost: ${it.message}", it) }
+            return null
+        }
+
         closing = true
         val started = System.nanoTime()
         var result: TerminationMessage? = null
@@ -108,7 +116,7 @@ class AssemblyAiStreamingTranscriber(
                 val eot = CompletableDeferred<Boolean>()
                 endOfTurn = eot
                 ws.send("""{"type":"ForceEndpoint"}""")
-                if (withTimeoutOrNull(if (hadOpenTurn) END_OF_TURN_WAIT_OPEN_MS else END_OF_TURN_WAIT_CLOSED_MS) { eot.await() } == null) {
+                if (withTimeoutOrNull(if (hadOpenTurn) END_OF_TURN_WAIT_OPEN_MS else END_OF_TURN_WAIT_CLOSED_MS) { runCatching { eot.await() }.getOrNull() } == null) {
                     logger.info("No end_of_turn after ForceEndpoint within budget (open turn: $hadOpenTurn)")
                 }
 
@@ -125,6 +133,9 @@ class AssemblyAiStreamingTranscriber(
             open = false
         }
 
+        // No summary and the socket failed on the way: report it so the session is saved as Failed with its audio
+        // (Retry) instead of inserting a possibly truncated transcript.
+        if (result == null) failure?.let { throw IOException("Streaming connection lost during shutdown: ${it.message}", it) }
         return result
     }
 
@@ -132,9 +143,10 @@ class AssemblyAiStreamingTranscriber(
         closing = true
         open = false
         runCatching { socket?.cancel() }
-        begin.completeExceptionally(IOException("Session aborted"))
-        termination.cancel()
-        endOfTurn?.cancel()
+        val aborted = IOException("Session aborted")
+        begin.completeExceptionally(aborted)
+        termination.completeExceptionally(aborted)
+        endOfTurn?.completeExceptionally(aborted)
     }
 
     private fun sendText(text: String) {
@@ -146,17 +158,17 @@ class AssemblyAiStreamingTranscriber(
         val msg = try {
             StreamingMessageParser.parse(text)
         } catch (e: SerializationException) {
-            logger.warn("Unparseable streaming message: $text", e)
+            logger.warn("Unparseable streaming message (${text.length} chars)", e)
             return
         } catch (e: IllegalArgumentException) {
-            logger.warn("Unparseable streaming message: $text", e)
+            logger.warn("Unparseable streaming message (${text.length} chars)", e)
             return
         }
 
         when (msg) {
             is BeginMessage -> begin.complete(msg)
             is TurnMessage -> {
-                logger.debug("Turn ${msg.turnOrder} eot=${msg.endOfTurn} fmt=${msg.turnIsFormatted}: ${msg.bestText}")
+                logger.debug("Turn ${msg.turnOrder} eot=${msg.endOfTurn} fmt=${msg.turnIsFormatted} chars=${msg.bestText.length}")
                 hasOpenTurn = !msg.endOfTurn
                 if (msg.endOfTurn) endOfTurn?.complete(true)
                 onTurn?.invoke(msg)
@@ -185,6 +197,7 @@ class AssemblyAiStreamingTranscriber(
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             logger.debug("Server closed the socket: $code $reason")
+            if (code != 1000) failure = IOException("Server closed the stream: $code $reason")
             if (!closing) fault(IOException("Server closed the stream: $code $reason"))
             open = false
             runCatching { webSocket.close(1000, null) }
@@ -192,17 +205,19 @@ class AssemblyAiStreamingTranscriber(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             open = false
-            begin.completeExceptionally(IOException("Socket closed before Begin"))
-            termination.cancel()
-            endOfTurn?.cancel()
+            val closed = IOException("Socket closed")
+            begin.completeExceptionally(closed)
+            termination.completeExceptionally(closed)
+            endOfTurn?.completeExceptionally(closed)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             open = false
             val error = if (response != null) IOException("HTTP ${response.code} ${response.message}".trim(), t) else t
+            failure = error
             if (!closing) fault(error) else begin.completeExceptionally(error)
-            termination.cancel()
-            endOfTurn?.cancel()
+            termination.completeExceptionally(error)
+            endOfTurn?.completeExceptionally(error)
         }
     }
 

@@ -109,6 +109,24 @@ class SqliteHistoryRepositoryTest {
     }
 
     @Test
+    fun deleteAllSparesAWavStillBeingRecorded(): Unit = runBlocking {
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "del")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        val now = 10_000_000L
+        val saved = File(paths.audioDir, "saved.wav").apply { writeText("x"); setLastModified(now - 3_600_000) }
+        val stale = File(paths.audioDir, "stale.wav").apply { writeText("x"); setLastModified(now - 3_600_000) }
+        val recording = File(paths.audioDir, "recording.wav").apply { writeText("x"); setLastModified(now - 1_000) }
+        repo.insert(record("saved", audio = saved.path))
+        val settings = FixedSettings(AppSettings())
+        HistoryRetention(repo, settings, paths, NoLogger, clock = { now }).deleteAll()
+        assertFalse(saved.exists())
+        assertFalse(stale.exists())
+        assertTrue(recording.exists())
+        assertEquals(0, repo.stats().count)
+    }
+
+    @Test
     fun retentionPassDeletesFilesAndOrphans(): Unit = runBlocking {
         val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "ret")
         val paths = AppPaths(dir)

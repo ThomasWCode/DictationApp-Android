@@ -326,6 +326,9 @@ class DictationOrchestrator(
             // 4. Finalising: graceful handshake bounded by the hard cap.
             publishSession(s, DictationState.Finalising, "Finishing")
             val termination = t.shutdown(HANDSHAKE_CAP_MS)
+            // A socket fault after the release is no longer being selected on; without a Termination summary the
+            // transcript may be missing its tail, so save it as Failed (audio kept for Retry) rather than insert it.
+            if (termination == null && s.faulted.isCompleted) return fail(s, record, capture, sink, t, s.faulted.await())
             val audioSeconds = termination?.audioDurationSeconds ?: (s.audioDurationMs / 1000.0)
             record.durationMs = s.audioDurationMs.toInt()
             record.costEstimate = CostEstimator.sttCost(settings.speechModel, audioSeconds)
@@ -365,12 +368,17 @@ class DictationOrchestrator(
             publishSession(s, DictationState.Inserting, "Inserting")
             val current = safeCapture()
             val target = if (current.isEditable) current else s.context
-            if (current.isEditable && current.packageName != s.context.packageName) {
-                logger.info("Focus moved during dictation: ${s.context.packageName} -> ${current.packageName}")
+            // Tone and cleanup stay as chosen at the start, but how the text goes in depends on where it lands:
+            // finishing in Gmail after starting in a plain editor must use Gmail's rule (e.g. Paste).
+            val insertMethod = if (target.packageName != s.context.packageName || target.urlHost != s.context.urlHost) {
+                logger.info("Focus moved during dictation: ${s.context.packageName} -> ${target.packageName}")
+                insertMethodFor(target, settings)
+            } else {
+                s.rule.insertMethod
             }
 
             val insertion = if (target.isEditable && !target.isPassword) {
-                inserter.insert(result.text, target, s.rule.insertMethod)
+                inserter.insert(result.text, target, insertMethod)
             } else {
                 clipboard.setText(result.text)
                 InsertionResult(InsertionOutcome.CopiedOnly, "No text field has focus, text copied", result.text)
@@ -704,6 +712,10 @@ class DictationOrchestrator(
     }
 
     companion object {
+        /** The insertion method the app rules give [target] (used when text lands somewhere other than where it started). */
+        fun insertMethodFor(target: ForegroundContext, settings: AppSettings): InsertMethod =
+            AppRulesResolver.resolve(target, settings.appRules, settings.defaultTone, settings.defaultCleanupLevel, settings.insertMethod).insertMethod
+
         const val CONNECT_TIMEOUT_MS = 3_000L
         const val HANDSHAKE_CAP_MS = 2_500L
         const val SILENT_MIC_WARNING_MS = 2_000L

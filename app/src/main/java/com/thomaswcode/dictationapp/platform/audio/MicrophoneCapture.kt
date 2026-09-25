@@ -35,6 +35,10 @@ class MicrophoneCapture(
 
     @Volatile private var running = false
     private var worker: Thread? = null
+    private val recordLock = Any()
+
+    /** The recorder while the worker owns it; [stop] uses it to unblock a read stuck on a stalled device. */
+    private var activeRecord: AudioRecord? = null
 
     override fun start() {
         if (running) return
@@ -42,11 +46,20 @@ class MicrophoneCapture(
         worker = thread(name = "mic-capture", priority = Thread.MAX_PRIORITY) { captureLoop() }
     }
 
-    /** Stops and waits briefly for the last frame so the tail of the speech is delivered before we return. */
+    /**
+     * Stops and waits briefly for the last frame so the tail of the speech is delivered before we return. If the
+     * read is blocked (the device stalled or disconnected), stopping the recorder releases it, so the worker never
+     * keeps the microphone or a Bluetooth route after the session has ended.
+     */
     override fun stop() {
         running = false
         val w = worker
-        if (w != null && w != Thread.currentThread()) runCatching { w.join(400) }
+        if (w == null || w == Thread.currentThread()) return
+        runCatching { w.join(250) }
+        if (w.isAlive) {
+            synchronized(recordLock) { runCatching { activeRecord?.stop() } }
+            runCatching { w.join(400) }
+        }
     }
 
     override fun close() = stop()
@@ -75,6 +88,7 @@ class MicrophoneCapture(
             return
         }
 
+        synchronized(recordLock) { activeRecord = record }
         try {
             if (record.state != AudioRecord.STATE_INITIALIZED) {
                 throw MicrophoneAccessDeniedException("The microphone could not be opened (is another app using it, or is access blocked?).")
@@ -110,7 +124,11 @@ class MicrophoneCapture(
                 var read = 0
                 while (read < buffer.size && running) {
                     val n = record.read(buffer, read, buffer.size - read)
-                    if (n < 0) throw IOException("AudioRecord.read returned $n")
+                    if (n < 0) {
+                        if (!running) break // stop() stopped the recorder to unblock this read
+                        throw IOException("AudioRecord.read returned $n")
+                    }
+
                     read += n
                 }
 
@@ -125,8 +143,11 @@ class MicrophoneCapture(
             logger.warn("Microphone capture failed: ${e.message}", e)
             onFault?.invoke(e)
         } finally {
-            runCatching { record.stop() }
-            record.release()
+            synchronized(recordLock) {
+                activeRecord = null
+                runCatching { record.stop() }
+                record.release()
+            }
             if (usedCommunicationDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) runCatching { audioManager.clearCommunicationDevice() }
             if (usedLegacySco) {
                 runCatching {

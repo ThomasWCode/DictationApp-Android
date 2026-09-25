@@ -29,6 +29,11 @@ class AppLog(private val dir: File) : Logger {
 
     val currentFile: File get() = File(dir, "dictation-${dayFormat.format(Date())}.log")
 
+    /** Deletes every log file (part of "Delete all history", so nothing dictated survives it). */
+    fun deleteAll() {
+        writer.execute { dir.listFiles()?.forEach { it.delete() } }
+    }
+
     override fun debug(message: String) = write(Log.DEBUG, "DBG", message, null)
 
     override fun info(message: String) = write(Log.INFO, "INF", message, null)

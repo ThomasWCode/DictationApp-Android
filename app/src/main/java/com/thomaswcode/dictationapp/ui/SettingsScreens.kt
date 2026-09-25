@@ -647,12 +647,13 @@ fun PrivacySettingsScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("Delete all history?") },
-            text = { Text("Every dictation and recording is removed permanently.") },
+            text = { Text("Every dictation, recording and diagnostic log is removed permanently.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirm = false
                     scope.launch {
                         graph.retention.deleteAll()
+                        graph.logger.deleteAll()
                         refresh++
                     }
                 }) { Text("Delete all", color = Palette.Recording) }

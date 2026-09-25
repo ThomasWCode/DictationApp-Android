@@ -84,11 +84,17 @@ class HistoryRetention(
     suspend fun deleteAll(): Int {
         val paths = history.deleteAll()
         paths.forEach { File(it).delete() }
-        this.paths.audioDir.listFiles()?.forEach { it.delete() }
+        // Unreferenced files go too, except one a dictation in progress is still writing: deleting it would leave that
+        // dictation's record pointing at nothing. Retention removes it later if it ends up orphaned.
+        val now = clock()
+        this.paths.audioDir.listFiles()?.filter { now - it.lastModified() > ACTIVE_RECORDING_GRACE_MS }?.forEach { it.delete() }
         return paths.size
     }
 
     companion object {
         private const val ORPHAN_GRACE_MS = 30 * 60 * 1000L
+
+        /** A recording in progress rewrites its WAV every 100 ms; anything untouched for a minute is not being recorded. */
+        private const val ACTIVE_RECORDING_GRACE_MS = 60 * 1000L
     }
 }

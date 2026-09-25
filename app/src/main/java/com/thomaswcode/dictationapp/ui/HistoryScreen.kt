@@ -60,6 +60,7 @@ import com.thomaswcode.dictationapp.core.history.DictationRecord
 import com.thomaswcode.dictationapp.core.history.HistoryStats
 import com.thomaswcode.dictationapp.core.history.RecordStatus
 import com.thomaswcode.dictationapp.core.insertion.ToastKind
+import com.thomaswcode.dictationapp.core.session.DictationOrchestrator
 import com.thomaswcode.dictationapp.platform.audio.WavPlayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -206,7 +207,8 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
                     delay(700)
                     val target = graph.bridge.capture()
                     if (target.isEditable && !target.isPassword) {
-                        graph.bridge.insert(r.displayText, target, graph.settings.current.insertMethod)
+                        // The destination app's rule decides how the text goes in (e.g. Paste for a rich editor).
+                        graph.bridge.insert(r.displayText, target, DictationOrchestrator.insertMethodFor(target, graph.settings.current))
                     } else {
                         graph.clipboard.setText(r.displayText)
                         graph.notifier.toast("Copied to clipboard", "No text field has focus.", ToastKind.Info)

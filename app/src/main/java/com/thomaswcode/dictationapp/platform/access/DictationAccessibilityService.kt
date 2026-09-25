@@ -147,6 +147,13 @@ class DictationAccessibilityService : AccessibilityService() {
 
     private fun teardown() {
         handler.removeCallbacks(refresh)
+        // Without the bubble there is no way to stop a hands-free dictation, and nowhere to insert it: discard it
+        // rather than let the microphone run invisibly until the time cap.
+        if (bubble != null && graph.hub.current.isActive) {
+            graph.logger.info("Accessibility service disconnected during a dictation; discarding it")
+            graph.orchestrator.cancel()
+        }
+
         bubble?.detach()
         bubble = null
         scope?.cancel()

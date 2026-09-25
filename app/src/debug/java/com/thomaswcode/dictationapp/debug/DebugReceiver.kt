@@ -18,11 +18,12 @@ import kotlinx.coroutines.launch
  * - SIMULATE  --es path WAV [--ei delay SECONDS]      full dictation with a WAV in place of the microphone,
  *                                                     inserted into whatever field has focus
  * - STREAM_TEST --es path WAV                         stream a WAV and log every turn and the final text
- * - DUMP_FOCUS [--es click TEXT] [--ez text true] [--eia probe 1,21]
+ * - DUMP_FOCUS [--es clickId VIEW_ID] [--ez clear true] [--es click TEXT] [--ez text true] [--eia probe 1,21]
  *                                                     log the focused field's properties to logcat (its text
  *                                                     only with text=true); click first focuses the node
  *                                                     showing TEXT, e.g. a search bar's placeholder; probe
- *                                                     moves the cursor to each position and back
+ *                                                     moves the cursor to each position and back; clear
+ *                                                     empties the focused field (tidying up after a test)
  *
  * WAV files must be readable by the app, e.g. pushed to /sdcard/Android/data/<package>/files/.
  */
@@ -79,6 +80,21 @@ class DebugReceiver : BroadcastReceiver() {
                 graph.scope.launch(Dispatchers.Main) {
                     try {
                         val svc = graph.bridge.service ?: return@launch log.warn("Debug DUMP_FOCUS: accessibility service not connected")
+                        intent.getStringExtra("clickId")?.let { id ->
+                            val target = svc.rootInActiveWindow?.findAccessibilityNodeInfosByViewId(id)?.firstOrNull()
+                            Log.i(TAG, "Debug focus: click #$id found=${target != null} clicked=${target?.performAction(AccessibilityNodeInfo.ACTION_CLICK)} focused=${target?.performAction(AccessibilityNodeInfo.ACTION_FOCUS)}")
+                            delay(800)
+                        }
+
+                        if (intent.getBooleanExtra("clear", false)) {
+                            val focused = graph.bridge.focusedField(svc)
+                            val cleared = focused?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply {
+                                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+                            })
+                            Log.i(TAG, "Debug focus: clear=$cleared")
+                            delay(300)
+                        }
+
                         intent.getStringExtra("click")?.let { label ->
                             val target = svc.rootInActiveWindow?.findAccessibilityNodeInfosByText(label)?.firstOrNull()
                             var clickable = target
@@ -109,6 +125,7 @@ class DebugReceiver : BroadcastReceiver() {
             append(" textLen=${text?.length} hintLen=${hint?.length} textEqualsHint=${text != null && text == hint} showingHint=${node.isShowingHintText}")
             append(" selection=${node.textSelectionStart}..${node.textSelectionEnd} granularities=${node.movementGranularities} children=${node.childCount}")
             append(" readable=${FieldInspector.readableText(node)?.length} placeholderSuspect=${FieldInspector.mayBePlaceholder(node, text.orEmpty())}")
+            append(" textWithoutCursor=${FieldInspector.reportsTextWithoutCursor(node, text.orEmpty())}")
             append(" actions=[$actions]")
             if (withText) append(" text='${text?.let(::visible)}' hint='$hint' contentDescription='${node.contentDescription}'")
         }

@@ -74,9 +74,11 @@ class AccessibilityBridge(
         }
 
         val key = FieldInspector.fieldKey(node)
-        var current = FieldInspector.readableText(node)
+        val reported = FieldInspector.readableText(node)
+        var current = reported
         // Read before the placeholder check, which may move the cursor and put it back.
         var selection = current?.let { FieldInspector.selection(node, it) } ?: (0 to 0)
+        val cursorReported = node.textSelectionStart >= 0 && node.textSelectionEnd >= 0
         val direct = method == InsertMethod.Direct && FieldInspector.supportsSetText(node) && !FieldInspector.inWebView(node)
         val placeholder = current != null && FieldInspector.showsPlaceholder(node, current, splicing = direct)
         if (placeholder) {
@@ -95,23 +97,25 @@ class AccessibilityBridge(
 
         // Direct: splice the text in at the cursor. Verified by reading the field back; a field that ignores
         // SET_TEXT (custom editors) is left untouched and gets a paste instead. A field that reports a placeholder
-        // as text is pasted into: its real content is hidden (WhatsApp keeps an invisible character there), and a
-        // paste lands at its own cursor without replacing anything.
+        // as text is not spliced into: its real content is hidden (WhatsApp keeps an invisible character in its
+        // search bar), and a paste lands at its own cursor without replacing anything.
         if (direct && current != null && !placeholder) {
             val newText = current.substring(0, selection.first) + formatted + current.substring(selection.second)
-            val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText) }
-            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                val cursor = selection.first + formatted.length
-                FieldInspector.setSelection(node, cursor, cursor)
-                delay(80)
-                node.refresh()
-                if (InsertionTextFormatter.directInsertApplied(current, newText, FieldInspector.readableText(node))) {
-                    formatter.remember(key, formatted)
-                    return@withContext InsertionResult(InsertionOutcome.Inserted, null, formatted)
-                }
-
-                logger.info("SET_TEXT was ignored by ${node.className} in ${node.packageName}; pasting instead")
+            if (setTextVerified(node, newText, selection.first + formatted.length, before = current)) {
+                formatter.remember(key, formatted)
+                return@withContext InsertionResult(InsertionOutcome.Inserted, null, formatted)
             }
+
+            logger.info("SET_TEXT was ignored by ${node.className} in ${node.packageName}; pasting instead")
+        }
+
+        // A stand-in with no cursor (WhatsApp's empty chat box) refuses a paste, since TextView pastes only at a
+        // cursor, but its real text is empty, so the dictation becomes its text and the clipboard is left alone.
+        if (placeholder && !cursorReported && FieldInspector.supportsSetText(node) &&
+            setTextVerified(node, formatted, formatted.length, before = reported.orEmpty())
+        ) {
+            formatter.remember(key, formatted)
+            return@withContext InsertionResult(InsertionOutcome.Inserted, null, formatted)
         }
 
         // Paste: Android does not let a background app read the clipboard, so it cannot be restored afterwards.
@@ -122,6 +126,19 @@ class AccessibilityBridge(
         } else {
             InsertionResult(InsertionOutcome.CopiedOnly, "This field does not accept pasting, text copied", formatted)
         }
+    }
+
+    /**
+     * Sets the field's text, puts the cursor at [cursor] and reads the field back: true when the text changed from
+     * [before] (a field may reformat what it is given) or reads as [newText].
+     */
+    private suspend fun setTextVerified(node: AccessibilityNodeInfo, newText: String, cursor: Int, before: String): Boolean {
+        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText) }
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return false
+        FieldInspector.setSelection(node, cursor, cursor)
+        delay(80)
+        node.refresh()
+        return InsertionTextFormatter.directInsertApplied(before, newText, FieldInspector.readableText(node))
     }
 
     /** The field with input focus, ignoring the keyboard's own search boxes. */

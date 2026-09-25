@@ -168,6 +168,17 @@ class AppRulesResolverTest {
     }
 
     @Test
+    fun onlyUnmodifiedSeedsAreTreatedAsSeeds() {
+        val gmail = LegacyAppRules.seed().first { it.packageGlob == "com.google.android.gm" }
+        assertTrue(LegacyAppRules.isUnmodifiedSeed(gmail))
+        assertTrue(LegacyAppRules.isUnmodifiedSeed(gmail.copy(tone = Tone.Casual, level = CleanupLevel.High, label = null)))
+        assertFalse(LegacyAppRules.isUnmodifiedSeed(gmail.copy(insertMethod = InsertMethod.Direct)))
+        assertFalse(LegacyAppRules.isUnmodifiedSeed(gmail.copy(hint = "Replies to my supervisor.")))
+        assertFalse(LegacyAppRules.isUnmodifiedSeed(gmail.copy(enabled = false)))
+        assertFalse(LegacyAppRules.isUnmodifiedSeed(AppRule(packageGlob = "com.example.notes")))
+    }
+
+    @Test
     fun legacySeedRulesResolveAsBefore() {
         assertEquals(Tone.Formal, resolve(ctx("com.google.android.gm")).tone)
         assertEquals(InsertMethod.Paste, resolve(ctx("com.google.android.gm")).insertMethod)

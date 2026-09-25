@@ -109,10 +109,20 @@ object LegacyAppRules {
     private const val DOCUMENT = "This is a document."
 
     /** True when [rule] targets an app or host that was seeded, whatever its style is now. */
-    fun isSeededTarget(rule: AppRule): Boolean = seed().any { seed ->
+    fun isSeededTarget(rule: AppRule): Boolean = seed().any { sameTarget(it, rule) }
+
+    /**
+     * True when [rule] is still one of the seeded rules: same target, insertion method, hint and on/off state (tone,
+     * level and label may differ). A seeded-target rule whose insertion method, hint or switch the user changed was
+     * customised and is kept by the migration.
+     */
+    fun isUnmodifiedSeed(rule: AppRule): Boolean = seed().any { seed ->
+        sameTarget(seed, rule) && seed.insertMethod == rule.insertMethod && seed.hint?.trim() == rule.hint?.trim() && seed.enabled == rule.enabled
+    }
+
+    private fun sameTarget(seed: AppRule, rule: AppRule): Boolean =
         seed.packageGlob?.trim().equals(rule.packageGlob?.trim(), ignoreCase = true) &&
             seed.urlHost?.trim().equals(rule.urlHost?.trim(), ignoreCase = true)
-    }
 
     fun seed(): List<AppRule> = listOf(
         // Rich-text editors lose formatting (links, signatures) when their whole text is replaced, so they paste.

@@ -60,8 +60,9 @@ Useful examples:
 | WhatsApp, Messages, Teams, Slack, Signal | Casual | Light | |
 | Termux | Neutral | None | |
 
-Version 0.1.0 seeded rules like these; settings schema 2 removes those seeded entries on upgrade (even edited
-ones) and keeps rules for any other app.
+Version 0.1.0 seeded rules like these; settings schema 2 removes them on upgrade while they are still seeds (tone
+and level may differ). A seeded rule whose insertion method, hint or on/off switch you changed is kept, as is every
+rule for another app.
 
 The personal dictionary (up to 100 key terms, starred first) and **Correct last dictation** work as on Windows.
 

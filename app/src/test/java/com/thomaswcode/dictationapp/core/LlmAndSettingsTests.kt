@@ -214,16 +214,19 @@ class SettingsStoreTest {
         val file = File(tmp.root, "settings.json").apply {
             writeText(
                 """{"schemaVersion":1,"appRules":[
-                  {"packageGlob":"com.google.android.gm","tone":"Formal","level":"Medium","insertMethod":"Paste"},
-                  {"packageGlob":"com.whatsapp","tone":"Formal"},
-                  {"urlHost":"docs.google.com","tone":"Formal"},
+                  {"packageGlob":"com.google.android.gm","tone":"Formal","level":"Medium","insertMethod":"Paste","hint":"This is an email."},
+                  {"packageGlob":"com.whatsapp","tone":"Formal","level":"High","hint":"This is a chat message."},
+                  {"urlHost":"docs.google.com","tone":"Formal","level":"Medium","hint":"This is a document."},
+                  {"packageGlob":"com.Slack","tone":"Casual","level":"Light","insertMethod":"Paste","hint":"This is a chat message."},
+                  {"packageGlob":"com.termux","tone":"Neutral","level":"None","hint":"This is a terminal.","enabled":false},
                   {"packageGlob":"com.example.notes","tone":"Casual"}
                 ]}""",
             )
         }
         val store = JsonSettingsStore(file, NoLogger)
         assertEquals(2, store.current.schemaVersion)
-        assertEquals(listOf("com.example.notes"), store.current.appRules.map { it.packageGlob })
+        // Seeds go (WhatsApp's tone/level changed, which does not count); customised seeds and user rules stay.
+        assertEquals(listOf("com.Slack", "com.termux", "com.example.notes"), store.current.appRules.map { it.packageGlob })
         // Persisted, so the migration runs once.
         assertTrue(file.readText().contains("\"schemaVersion\": 2"))
         assertFalse(file.readText().contains("com.whatsapp"))

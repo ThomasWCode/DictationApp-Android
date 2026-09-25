@@ -71,6 +71,8 @@ adb push sample.wav /sdcard/Android/data/$pkg/files/sample.wav
 adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.STREAM_TEST --es path /sdcard/Android/data/$pkg/files/sample.wav
 # Full dictation into whatever field has focus after 5 s (the Windows --simulate)
 adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.SIMULATE --es path /sdcard/Android/data/$pkg/files/sample.wav --ei delay 5
+# Log the focused field's structure to logcat (add --ez text true for its text, --eia probe 1,5 to test cursor moves)
+adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.DUMP_FOCUS
 ```
 
 ## Layout

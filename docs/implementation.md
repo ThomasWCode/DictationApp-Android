@@ -65,7 +65,9 @@ Each Windows class became a Kotlin file with the same responsibilities and const
   as the text, with no hint text and `isShowingHintText` false. `FieldInspector.showsPlaceholder` checks short,
   single-line text whose cursor is not at its end in fields that offer `ACTION_SET_SELECTION`: it moves the cursor
   to the end of the reported text, which a field refuses beyond its real text (TextView and Compose both do), and
-  puts it back when accepted. A placeholder counts as an empty field and is pasted into rather than replaced.
+  puts it back when accepted. A field that does not report its cursor is only checked when the text would be
+  spliced in directly (at the end, where a missing cursor counts as being), never before a paste, which must land
+  at the field's own cursor. A placeholder counts as an empty field and is pasted into rather than replaced.
 
 ## Bubble
 

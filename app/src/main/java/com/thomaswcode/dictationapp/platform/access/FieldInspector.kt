@@ -56,13 +56,19 @@ object FieldInspector {
      * Tells a placeholder reported as text from real text. A field only moves its cursor within its real text,
      * so moving it to the end of [text] is refused for a stand-in and accepted for real text, which then gets
      * its cursor back. Moves the cursor only when [mayBePlaceholder].
+     *
+     * An unreported cursor cannot be put back, so such a field is only checked when [splicing]: the text is then
+     * set around the end of the reported text, where a missing cursor already counts as being. A paste goes to
+     * the field's own cursor, which must not move.
      */
-    fun showsPlaceholder(node: AccessibilityNodeInfo, text: String): Boolean {
+    fun showsPlaceholder(node: AccessibilityNodeInfo, text: String, splicing: Boolean): Boolean {
         if (!mayBePlaceholder(node, text)) return false
         val start = node.textSelectionStart
         val end = node.textSelectionEnd
+        val cursorReported = start >= 0 && end >= 0
+        if (!cursorReported && !splicing) return false
         if (!setSelection(node, text.length, text.length)) return true
-        if (start >= 0 && end >= 0) setSelection(node, start, end)
+        if (cursorReported) setSelection(node, start, end)
         return false
     }
 

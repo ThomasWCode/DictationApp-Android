@@ -41,27 +41,44 @@ object FieldInspector {
         return text
     }
 
+    /** Long or multi-line text is never taken for a placeholder. */
+    private fun placeholderSized(text: String): Boolean =
+        text.isNotEmpty() && text.length <= MAX_PLACEHOLDER_LENGTH && '\n' !in text
+
     /**
-     * True when [text] could be a placeholder the app did not flag as a hint. WhatsApp's chat box and search bar
-     * hold one invisible character when empty and report "Message" / "Ask Meta AI or Search" as their text.
-     * A cursor already at the end of the reported text proves it is real; long or multi-line text is never a
-     * placeholder; and a field that cannot move its cursor cannot be checked.
+     * True when an EditText reports [text] but no cursor and none of the cursor actions TextView adds whenever it
+     * holds real text (ACTION_SET_SELECTION and movement granularities): the text is a stand-in. WhatsApp's empty
+     * chat box reports "Message" this way, with no hint text. A reported cursor means real text, whatever actions a
+     * custom accessibility delegate leaves out.
+     */
+    fun reportsTextWithoutCursor(node: AccessibilityNodeInfo, text: String): Boolean =
+        placeholderSized(text) && node.className?.toString() == EDIT_TEXT_CLASS &&
+            node.textSelectionStart < 0 && node.textSelectionEnd < 0 &&
+            !node.actionList.contains(AccessibilityAction.ACTION_SET_SELECTION) && node.movementGranularities == 0
+
+    /**
+     * True when [text] could be a placeholder the app did not flag as a hint, and a cursor move can tell. WhatsApp's
+     * search bar holds one invisible character when empty and reports "Ask Meta AI or Search" as its text. A cursor
+     * already at the end of the reported text proves it is real, and a field that cannot move its cursor cannot be
+     * checked this way.
      */
     fun mayBePlaceholder(node: AccessibilityNodeInfo, text: String): Boolean =
-        text.isNotEmpty() && text.length <= MAX_PLACEHOLDER_LENGTH && '\n' !in text &&
+        placeholderSized(text) &&
             node.actionList.contains(AccessibilityAction.ACTION_SET_SELECTION) &&
             maxOf(node.textSelectionStart, node.textSelectionEnd) < text.length
 
     /**
-     * Tells a placeholder reported as text from real text. A field only moves its cursor within its real text,
-     * so moving it to the end of [text] is refused for a stand-in and accepted for real text, which then gets
-     * its cursor back. Moves the cursor only when [mayBePlaceholder].
+     * Tells a placeholder reported as text from real text: either [reportsTextWithoutCursor], or a cursor check.
+     * A field only moves its cursor within its real text, so moving it to the end of [text] is refused for a
+     * stand-in and accepted for real text, which then gets its cursor back. Moves the cursor only when
+     * [mayBePlaceholder].
      *
      * An unreported cursor cannot be put back, so such a field is only checked when [splicing]: the text is then
      * set around the end of the reported text, where a missing cursor already counts as being. A paste goes to
      * the field's own cursor, which must not move.
      */
     fun showsPlaceholder(node: AccessibilityNodeInfo, text: String, splicing: Boolean): Boolean {
+        if (reportsTextWithoutCursor(node, text)) return true
         if (!mayBePlaceholder(node, text)) return false
         val start = node.textSelectionStart
         val end = node.textSelectionEnd
@@ -111,4 +128,6 @@ object FieldInspector {
 
     /** Longer than any placeholder; also keeps the cursor still while dictating into the middle of a document. */
     const val MAX_PLACEHOLDER_LENGTH = 80
+
+    private const val EDIT_TEXT_CLASS = "android.widget.EditText"
 }

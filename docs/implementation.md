@@ -61,8 +61,12 @@ Each Windows class became a Kotlin file with the same responsibilities and const
   Insertion runs on the main thread: read the text and selection (treating hint text as empty), format the
   spacing, `ACTION_SET_TEXT` the spliced text, move the cursor with `ACTION_SET_SELECTION`, wait 80 ms and read
   back; if unchanged, clipboard + `ACTION_PASTE`; if that is refused, clipboard only.
-- Placeholders reported as text: WhatsApp's empty fields hold one zero-width space and report their placeholder
-  as the text, with no hint text and `isShowingHintText` false. `FieldInspector.showsPlaceholder` checks short,
+- Placeholders reported as text: WhatsApp's empty fields report their placeholder as the text, with no hint text
+  and `isShowingHintText` false. The chat box is an EditText that reports "Message" but none of the cursor actions
+  TextView adds whenever it holds real text (`ACTION_SET_SELECTION`, movement granularities), and no cursor:
+  `FieldInspector.reportsTextWithoutCursor` recognises that without touching the field, and since TextView pastes
+  only at a cursor, such a field gets the dictation through `ACTION_SET_TEXT` (it is empty). The search bar holds
+  one zero-width space with the cursor after it: `FieldInspector.showsPlaceholder` checks short,
   single-line text whose cursor is not at its end in fields that offer `ACTION_SET_SELECTION`: it moves the cursor
   to the end of the reported text, which a field refuses beyond its real text (TextView and Compose both do), and
   puts it back when accepted. A field that does not report its cursor is only checked when the text would be

@@ -42,7 +42,7 @@ class FieldInspectorTest {
     fun `WhatsApp search bar placeholder over an invisible character is recognised`() {
         val node = field("Ask Meta AI or Search", cursor = 1, realLength = 1)
 
-        assertTrue(FieldInspector.showsPlaceholder(node, "Ask Meta AI or Search"))
+        assertTrue(FieldInspector.showsPlaceholder(node, "Ask Meta AI or Search", splicing = true))
         assertEquals(listOf(21 to 21), moves)
     }
 
@@ -50,30 +50,39 @@ class FieldInspectorTest {
     fun `WhatsApp chat box placeholder with the cursor at the start is recognised`() {
         val node = field("Message", cursor = 0, realLength = 1)
 
-        assertTrue(FieldInspector.showsPlaceholder(node, "Message"))
+        assertTrue(FieldInspector.showsPlaceholder(node, "Message", splicing = true))
     }
 
     @Test
     fun `real text keeps its cursor after the check`() {
         val node = field("Hello there", cursor = 3)
 
-        assertFalse(FieldInspector.showsPlaceholder(node, "Hello there"))
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hello there", splicing = false))
         assertEquals(listOf(11 to 11, 3 to 3), moves)
     }
 
     @Test
-    fun `real text with no reported cursor is left with the cursor at the end`() {
+    fun `with no reported cursor, only text that is spliced at the end anyway is checked`() {
         val node = field("Hello", cursor = -1)
 
-        assertFalse(FieldInspector.showsPlaceholder(node, "Hello"))
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hello", splicing = true))
         assertEquals(listOf(5 to 5), moves)
+        assertTrue(FieldInspector.showsPlaceholder(field("Message", cursor = -1, realLength = 1), "Message", splicing = true))
+    }
+
+    @Test
+    fun `with no reported cursor, a paste keeps the field's own cursor`() {
+        val node = field("Hello", cursor = -1)
+
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hello", splicing = false))
+        assertTrue(moves.isEmpty())
     }
 
     @Test
     fun `a cursor already at the end proves the text is real without moving it`() {
         val node = field("Hello", cursor = 5)
 
-        assertFalse(FieldInspector.showsPlaceholder(node, "Hello"))
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hello", splicing = true))
         assertTrue(moves.isEmpty())
     }
 
@@ -81,7 +90,7 @@ class FieldInspectorTest {
     fun `fields that cannot move their cursor are trusted rather than cleared`() {
         val node = field("Hello", cursor = 0, realLength = 0, canMoveCursor = false)
 
-        assertFalse(FieldInspector.showsPlaceholder(node, "Hello"))
+        assertFalse(FieldInspector.showsPlaceholder(node, "Hello", splicing = true))
         assertTrue(moves.isEmpty())
     }
 
@@ -89,8 +98,8 @@ class FieldInspectorTest {
     fun `long or multi-line text is never taken for a placeholder`() {
         val long = "a".repeat(FieldInspector.MAX_PLACEHOLDER_LENGTH + 1)
 
-        assertFalse(FieldInspector.showsPlaceholder(field(long, cursor = 0, realLength = 0), long))
-        assertFalse(FieldInspector.showsPlaceholder(field("Dear Sam,\nThanks", cursor = 0, realLength = 0), "Dear Sam,\nThanks"))
+        assertFalse(FieldInspector.showsPlaceholder(field(long, cursor = 0, realLength = 0), long, splicing = true))
+        assertFalse(FieldInspector.showsPlaceholder(field("Dear Sam,\nThanks", cursor = 0, realLength = 0), "Dear Sam,\nThanks", splicing = true))
         assertTrue(moves.isEmpty())
     }
 

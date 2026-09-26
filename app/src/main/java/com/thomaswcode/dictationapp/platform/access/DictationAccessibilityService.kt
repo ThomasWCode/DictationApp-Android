@@ -113,6 +113,8 @@ class DictationAccessibilityService : AccessibilityService() {
             ?.top
         val focus = g.bridge.focusedField(this)
         val pkg = focus?.packageName?.toString()
+        // Keeps the browser's address memory on the tab now in front, while its bar is on screen.
+        if (AccessibilityBridge.isBrowser(pkg)) g.bridge.browserUrl(this, pkg!!)
         val s = g.settings.current
         val eligible = focus != null &&
             FieldInspector.isEditableField(focus) &&

@@ -774,6 +774,23 @@ class DictationOrchestratorTest {
     }
 
     @Test
+    fun anAddressThatCannotBeReadAtInsertionIsNoMove() {
+        // Gmail on the web pastes; the address bar scrolled away while the email was dictated.
+        settings.update { it.copy(appRules = listOf(AppRule(urlHost = "mail.google.com", insertMethod = InsertMethod.Paste))) }
+        context = editable.copy(packageName = "com.android.chrome", appLabel = "Chrome", url = "mail.google.com/mail/u/0")
+        start()
+        orchestrator.press()
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        capture.emit(1)
+        transcriber.raiseTurn(0, "Dear Sam.", true, true)
+        context = context.copy(url = null, urlSource = "none")
+        orchestrator.release()
+        waitForIdleSession()
+        assertEquals(InsertMethod.Paste, inserter.inserted.single().second)
+    }
+
+    @Test
     fun appRuleInsertMethodIsPassedToTheInserter() {
         settings.update { it.copy(appRules = listOf(AppRule(packageGlob = "com.whatsapp", insertMethod = InsertMethod.Paste))) }
         start()

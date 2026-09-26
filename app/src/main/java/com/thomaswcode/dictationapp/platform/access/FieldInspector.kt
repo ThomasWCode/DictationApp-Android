@@ -30,15 +30,38 @@ object FieldInspector {
 
     /**
      * The field's real text, or "" when it is showing its hint (an empty field reports the hint as its text).
-     * Returns null when the text cannot be trusted (masked).
+     * Text equal to the hint counts as the hint only when the field shows no sign of holding real text: a draft that
+     * happens to read "Meeting notes" in a field hinted "Meeting notes" is real. Returns null when the text cannot be
+     * trusted (masked).
      */
     fun readableText(node: AccessibilityNodeInfo): String? {
         if (node.isPassword) return null
         if (node.isShowingHintText) return ""
         val text = node.text?.toString() ?: return ""
         val hint = node.hintText?.toString()
-        if (hint != null && hint.isNotEmpty() && text == hint) return ""
+        if (hint != null && hint.isNotEmpty() && text == hint && !showsRealText(node)) return ""
         return text
+    }
+
+    /**
+     * Signs that a field holds real text, which TextView gives whenever it does: a reported cursor, the cursor actions,
+     * movement granularities, or the character-location extra.
+     */
+    fun showsRealText(node: AccessibilityNodeInfo): Boolean =
+        (node.textSelectionStart >= 0 && node.textSelectionEnd >= 0) ||
+            node.actionList.contains(AccessibilityAction.ACTION_SET_SELECTION) ||
+            node.movementGranularities != 0 ||
+            AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY in node.availableExtraData
+
+    /**
+     * True when Android itself says the field's real text is empty: TextView (Android 10+) offers only the
+     * rendering-info extra while it holds no text and adds the character-location extra as soon as it holds any.
+     * WhatsApp's chat box, whose empty state reports "Message" as its text, is a TextView like this; a custom field
+     * (Flutter, a hand-written delegate) with a real draft is not.
+     */
+    fun platformReportsEmpty(node: AccessibilityNodeInfo): Boolean {
+        val extras = node.availableExtraData
+        return AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY in extras && AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY !in extras
     }
 
     /** Long or multi-line text is never taken for a placeholder. */
@@ -46,15 +69,23 @@ object FieldInspector {
         text.isNotEmpty() && text.length <= MAX_PLACEHOLDER_LENGTH && '\n' !in text
 
     /**
-     * True when an EditText reports [text] but no cursor and none of the cursor actions TextView adds whenever it
-     * holds real text (ACTION_SET_SELECTION and movement granularities): the text is a stand-in. WhatsApp's empty
-     * chat box reports "Message" this way, with no hint text. A reported cursor means real text, whatever actions a
-     * custom accessibility delegate leaves out.
+     * True when an EditText reports short [text] but no cursor and none of the cursor actions TextView adds whenever it
+     * holds real text (ACTION_SET_SELECTION and movement granularities). WhatsApp's empty chat box reports "Message"
+     * this way, with no hint text; so could a custom field holding a real draft, which is why this alone never counts
+     * as proof that the field is empty (see [reportsTextWithoutCursor]).
      */
-    fun reportsTextWithoutCursor(node: AccessibilityNodeInfo, text: String): Boolean =
+    fun looksLikeStandIn(node: AccessibilityNodeInfo, text: String): Boolean =
         placeholderSized(text) && node.className?.toString() == EDIT_TEXT_CLASS &&
             node.textSelectionStart < 0 && node.textSelectionEnd < 0 &&
             !node.actionList.contains(AccessibilityAction.ACTION_SET_SELECTION) && node.movementGranularities == 0
+
+    /**
+     * True when [looksLikeStandIn] and the field is proven empty: Android says so ([platformReportsEmpty]), or it is
+     * WhatsApp's chat box, whose empty state was checked on a device. Only then may the whole field be replaced by the
+     * dictation; missing accessibility metadata alone never authorises that, since it would destroy a real draft.
+     */
+    fun reportsTextWithoutCursor(node: AccessibilityNodeInfo, text: String): Boolean =
+        looksLikeStandIn(node, text) && (platformReportsEmpty(node) || node.viewIdResourceName == WHATSAPP_CHAT_BOX_ID)
 
     /**
      * True when [text] could be a placeholder the app did not flag as a hint, and a cursor move can tell. WhatsApp's
@@ -130,4 +161,7 @@ object FieldInspector {
     const val MAX_PLACEHOLDER_LENGTH = 80
 
     private const val EDIT_TEXT_CLASS = "android.widget.EditText"
+
+    /** WhatsApp's chat box: an empty one reports "Message" as its text (verified with DUMP_FOCUS on a Galaxy S24). */
+    const val WHATSAPP_CHAT_BOX_ID = "com.whatsapp:id/entry"
 }

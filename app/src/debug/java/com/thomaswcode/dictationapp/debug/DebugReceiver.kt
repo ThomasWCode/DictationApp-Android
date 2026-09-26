@@ -125,7 +125,8 @@ class DebugReceiver : BroadcastReceiver() {
             append(" textLen=${text?.length} hintLen=${hint?.length} textEqualsHint=${text != null && text == hint} showingHint=${node.isShowingHintText}")
             append(" selection=${node.textSelectionStart}..${node.textSelectionEnd} granularities=${node.movementGranularities} children=${node.childCount}")
             append(" readable=${FieldInspector.readableText(node)?.length} placeholderSuspect=${FieldInspector.mayBePlaceholder(node, text.orEmpty())}")
-            append(" textWithoutCursor=${FieldInspector.reportsTextWithoutCursor(node, text.orEmpty())}")
+            append(" standInShape=${FieldInspector.looksLikeStandIn(node, text.orEmpty())} provenEmpty=${FieldInspector.reportsTextWithoutCursor(node, text.orEmpty())}")
+            append(" platformEmpty=${FieldInspector.platformReportsEmpty(node)} extras=${node.availableExtraData}")
             append(" actions=[$actions]")
             if (withText) append(" text='${text?.let(::visible)}' hint='$hint' contentDescription='${node.contentDescription}'")
         }

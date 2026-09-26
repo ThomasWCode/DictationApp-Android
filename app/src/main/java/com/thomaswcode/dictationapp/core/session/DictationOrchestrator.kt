@@ -411,8 +411,9 @@ class DictationOrchestrator(
             val current = safeCapture()
             val target = if (current.isEditable) current else s.context
             // Tone and cleanup stay as chosen at the start, but how the text goes in depends on where it lands:
-            // finishing in Gmail after starting in a plain editor must use Gmail's rule (e.g. Paste).
-            val insertMethod = if (target.packageName != s.context.packageName || target.urlHost != s.context.urlHost) {
+            // finishing in Gmail after starting in a plain editor must use Gmail's rule (e.g. Paste). An address that
+            // cannot be read now (the bar scrolled away) is no sign of a move.
+            val insertMethod = if (target.packageName != s.context.packageName || (target.urlHost != null && target.urlHost != s.context.urlHost)) {
                 logger.info("Focus moved during dictation: ${s.context.packageName} -> ${target.packageName}")
                 insertMethodFor(target, settings)
             } else {

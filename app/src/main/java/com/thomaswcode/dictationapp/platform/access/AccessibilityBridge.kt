@@ -2,6 +2,7 @@ package com.thomaswcode.dictationapp.platform.access
 
 import android.accessibilityservice.AccessibilityService
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.thomaswcode.dictationapp.core.Logger
@@ -29,12 +30,13 @@ class AccessibilityBridge(
     private val logger: Logger,
     /** Accessibility nodes are used on the main thread; replaceable so tests can run the insertion routes directly. */
     private val main: CoroutineDispatcher = Dispatchers.Main,
+    clock: () -> Long = { SystemClock.elapsedRealtime() },
 ) : ForegroundContextProvider, TextInserter {
     @Volatile var service: AccessibilityService? = null
 
     private val formatter = InsertionTextFormatter()
     private val labels = ConcurrentHashMap<String, String>()
-    private val lastUrl = ConcurrentHashMap<String, String>()
+    private val urls = UrlMemory(clock = clock)
 
     val isConnected: Boolean get() = service != null
 
@@ -45,12 +47,18 @@ class AccessibilityBridge(
         val label = appLabel(svc, pkg)
         val title = focus?.window?.title?.toString()?.takeIf { it.isNotBlank() } ?: label
         val editable = focus != null && FieldInspector.isEditableField(focus)
+        val url = browserUrl(svc, pkg)
         ForegroundContext(
             windowId = focus?.windowId ?: -1,
             packageName = pkg,
             appLabel = label,
             windowTitle = title,
-            url = browserUrl(svc, pkg),
+            url = url?.address,
+            urlSource = when {
+                url == null -> "none"
+                url.remembered -> "remembered"
+                else -> "live"
+            },
             isEditable = editable,
             isPassword = focus != null && FieldInspector.isSecret(focus),
             editableReason = when {
@@ -207,30 +215,41 @@ class AccessibilityBridge(
         }
     }
 
+    data class BrowserUrl(val address: String, val remembered: Boolean)
+
     /**
-     * Reads the browser's address bar so URL rules (Gmail, Docs, web WhatsApp) work per tab. The bar can be
-     * scrolled away, so the last value seen per browser is remembered.
+     * Reads the browser's address bar so URL rules (Gmail, Docs, web WhatsApp) work per tab. The focused window is read
+     * first, and only address-shaped text counts: a search being typed into the bar is not a website. The bar scrolls
+     * away with the page, so the last address seen is used for a few minutes after ([UrlMemory]); the service reads
+     * the bar at every focus and window change, which keeps that memory on the tab now in front.
      */
-    fun browserUrl(svc: AccessibilityService, packageName: String): String? {
+    fun browserUrl(svc: AccessibilityService, packageName: String): BrowserUrl? {
         val ids = URL_BAR_IDS[packageName] ?: return null
         val windows = runCatching { svc.windows }.getOrDefault(emptyList())
+            .sortedWith(compareByDescending<AccessibilityWindowInfo> { it.isFocused }.thenByDescending { it.isActive })
         for (w in windows) {
             val root = w.root ?: continue
             if (root.packageName?.toString() != packageName) continue
             for (id in ids) {
-                val text = root.findAccessibilityNodeInfosByViewId(id).firstOrNull()?.text?.toString()?.trim()
-                if (!text.isNullOrEmpty() && !text.contains(' ')) {
-                    lastUrl[packageName] = text
-                    return text
+                val bar = root.findAccessibilityNodeInfosByViewId(id).firstOrNull() ?: continue
+                val text = bar.text?.toString()?.trim().orEmpty()
+                if (UrlMemory.looksLikeAddress(text)) {
+                    urls.remember(packageName, text)
+                    return BrowserUrl(text, remembered = false)
                 }
+
+                // The bar is on screen without an address (a search being typed, a new tab): no website.
+                return null
             }
         }
 
-        return lastUrl[packageName]
+        return urls.recall(packageName)?.let { BrowserUrl(it, remembered = true) }
     }
 
     companion object {
         private const val MAX_FOCUS_SEARCH_NODES = 600
+
+        fun isBrowser(packageName: String?): Boolean = packageName != null && packageName in URL_BAR_IDS
 
         val URL_BAR_IDS: Map<String, List<String>> = mapOf(
             "com.android.chrome" to listOf("com.android.chrome:id/url_bar"),
@@ -244,5 +263,31 @@ class AccessibilityBridge(
             "com.sec.android.app.sbrowser" to listOf("com.sec.android.app.sbrowser:id/location_bar_edit_text"),
             "com.duckduckgo.mobile.android" to listOf("com.duckduckgo.mobile.android:id/omnibarTextInput"),
         )
+    }
+}
+
+/**
+ * The last address seen in each browser's bar, recalled for [ttlMs] after: long enough for the bar to scroll away
+ * while writing an email, short enough that a stale site's rule does not follow the user to another tab for long.
+ */
+class UrlMemory(private val ttlMs: Long = TTL_MS, private val clock: () -> Long) {
+    private val seen = ConcurrentHashMap<String, Pair<String, Long>>()
+
+    fun remember(packageName: String, address: String) {
+        seen[packageName] = address to clock()
+    }
+
+    fun recall(packageName: String): String? = seen[packageName]?.takeIf { clock() - it.second <= ttlMs }?.first
+
+    companion object {
+        const val TTL_MS = 3 * 60_000L
+
+        private val ADDRESS = Regex(
+            """^(?:[a-z][a-z0-9+.-]*://)?(?:localhost|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:\p{L}{2,}|\d{1,3}))(?::\d+)?(?:[/?#]\S*)?$""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** "mail.google.com/mail/u/0", "https://docs.google.com/…", "localhost:8080": yes; "weather tomorrow": no. */
+        fun looksLikeAddress(text: String): Boolean = ADDRESS.matches(text)
     }
 }

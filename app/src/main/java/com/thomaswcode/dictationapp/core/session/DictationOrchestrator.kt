@@ -475,10 +475,6 @@ class DictationOrchestrator(
         return try {
             // The stored text carries the spacing of where it first went; the field it goes into now decides afresh.
             val insertion = deliver(text.trimStart(), target, insertMethodFor(target, settings.current))
-            if (insertion.outcome == InsertionOutcome.Inserted && insertion.leftOnClipboard) {
-                notifier.toast("Inserted and copied", insertion.reason ?: "The text is on the clipboard as well.", ToastKind.Info)
-            }
-
             logger.info("History Insert into ${target.packageName}: ${insertion.outcome}")
             insertion
         } catch (e: CancellationException) {
@@ -519,7 +515,10 @@ class DictationOrchestrator(
                 (insertion.reason ?: "Unknown error") + if (copiedAfterFailure) ". Text copied to the clipboard." else ". Use Copy in History.",
                 ToastKind.Warning,
             )
-            InsertionOutcome.Inserted -> Unit
+            // The bubble cannot show text, so an uncertain insertion is told by a toast.
+            InsertionOutcome.Inserted -> if (insertion.leftOnClipboard) {
+                notifier.toast("Inserted and copied", insertion.reason ?: "The text is on the clipboard as well.", ToastKind.Info)
+            }
         }
 
         insertion

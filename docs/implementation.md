@@ -59,7 +59,9 @@ Each Windows class became a Kotlin file with the same responsibilities and const
 ## Accessibility service
 
 - Config: focus, click, selection and window events; `flagRetrieveInteractiveWindows` (to see the keyboard
-  window), `flagReportViewIds` (browser address bars), `canRetrieveWindowContent`. No package filter.
+  window), `flagReportViewIds` (browser address bars), `canRetrieveWindowContent`, and `isAccessibilityTool`
+  (Android 14+ hides views an app marks data-sensitive, such as Gmail's whole compose screen, from any other
+  service). No package filter.
 - Every relevant event schedules an evaluation, debounced by 80 ms: the keyboard's top edge comes from the
   `TYPE_INPUT_METHOD` window's bounds, the field from `findFocus(FOCUS_INPUT)` (ignoring fields inside the keyboard
   itself; for Compose, whose host View reports the focus, the focused editable virtual node underneath), and
@@ -82,7 +84,7 @@ Each Windows class became a Kotlin file with the same responsibilities and const
   rendering-info extra but not the character-location extra while it holds no text: `platformReportsEmpty`) or
   WhatsApp's chat-box id. Such a proven-empty field, which refuses a paste (TextView pastes only at a cursor), gets
   the dictation through `ACTION_SET_TEXT`. An unproven one keeps its text, gets the dictation at its end, and the
-  dictation is also copied (`InsertionResult.leftOnClipboard`, the "also copied" badge). `DUMP_FOCUS` logs the
+  dictation is also copied (`InsertionResult.leftOnClipboard`, an "Inserted and copied" toast). `DUMP_FOCUS` logs the
   extras so the marker can be checked on a device. The search bar holds
   one zero-width space with the cursor after it: `FieldInspector.showsPlaceholder` checks short,
   single-line text whose cursor is not at its end in fields that offer `ACTION_SET_SELECTION`: it moves the cursor

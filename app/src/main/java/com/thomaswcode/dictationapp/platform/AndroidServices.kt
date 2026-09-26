@@ -10,6 +10,7 @@ import android.widget.Toast
 import com.thomaswcode.dictationapp.core.Logger
 import com.thomaswcode.dictationapp.core.history.HistoryRepository
 import com.thomaswcode.dictationapp.core.history.InterruptedRecordings
+import com.thomaswcode.dictationapp.core.history.WavRepair
 import com.thomaswcode.dictationapp.core.insertion.Clipboard
 import com.thomaswcode.dictationapp.core.insertion.Notifier
 import com.thomaswcode.dictationapp.core.insertion.ToastKind
@@ -67,9 +68,13 @@ class HistoryRetention(
 
     suspend fun run() {
         try {
+            // Judged before anything is added or deleted: History with no records at all (a lost or recreated database)
+            // skips the orphan sweep rather than treat every recording as an orphan, even once recovery below has listed
+            // one in it. Delete all empties the folder itself.
+            val historyWasEmpty = history.stats().count == 0
             if (!recovered) {
-                recovered = true
                 val added = InterruptedRecordings(history, { settings.current }, paths.audioDir, logger, clock).recover(runStartedAt)
+                recovered = true // only once it succeeded: a database error leaves it for the next pass
                 if (added > 0) {
                     notifier?.toast(
                         "Dictation recovered",
@@ -83,9 +88,6 @@ class HistoryRetention(
             val s = settings.current
             val now = clock()
             var removedFiles = 0
-            // Judged before this pass deletes anything: History with no records at all (a lost or recreated database)
-            // skips the orphan sweep rather than treat every recording as an orphan. Delete all empties the folder itself.
-            val historyWasEmpty = history.stats().count == 0
             s.historyRetention.millis?.let { age ->
                 history.deleteOlderThan(now - age).forEach { if (File(it).delete()) removedFiles++ }
             }
@@ -94,11 +96,12 @@ class HistoryRetention(
                 history.clearAudioOlderThan(now - age).forEach { if (File(it).delete()) removedFiles++ }
             }
 
-            // Orphans: WAVs no record references (a failed save). Recent files may be recording now.
+            // Orphans: WAVs no record references. Recent files may be recording now, and an unfinished one is left for
+            // recovery at the next start (a failed save promised that; recovery only looks at earlier runs' files).
             if (!historyWasEmpty) {
                 val referenced = history.referencedAudioPaths()
                 paths.audioDir.listFiles()
-                    ?.filter { it.isFile && it.path !in referenced && now - it.lastModified() > ORPHAN_GRACE_MS }
+                    ?.filter { it.isFile && it.path !in referenced && now - it.lastModified() > ORPHAN_GRACE_MS && !WavRepair.isUnfinished(it) }
                     ?.forEach { if (it.delete()) removedFiles++ }
             }
 

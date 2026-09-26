@@ -25,36 +25,48 @@ object WavRepair {
      * audio byte count. Null, and the file untouched, for anything else. Walks the chunks, so any PCM layout works.
      */
     fun repairUnfinished(file: File): Long? = RandomAccessFile(file, "rw").use { raf ->
+        val layout = layout(raf) ?: return null
+        val pcm = (raf.length() - layout.dataOffset) and 1L.inv()
+        if (!layout.unfinished(pcm)) return null
+        raf.setLength(layout.dataOffset + pcm)
+        raf.seek(4)
+        raf.write(le32Bytes(layout.dataOffset + pcm - 8))
+        raf.seek(layout.dataOffset - 4)
+        raf.write(le32Bytes(pcm))
+        raf.fd.sync()
+        pcm
+    }
+
+    /** True when [file] is an unfinished recording; reads only, the file is left as it is. */
+    fun isUnfinished(file: File): Boolean = try {
+        RandomAccessFile(file, "r").use { raf ->
+            val layout = layout(raf) ?: return false
+            layout.unfinished((raf.length() - layout.dataOffset) and 1L.inv())
+        }
+    } catch (_: IOException) {
+        false
+    }
+
+    private class Layout(val riffSize: Long, val dataOffset: Long, val dataSize: Long) {
+        /** A RIFF size of zero, or a data size of zero with audio after the header: the sizes were never written. */
+        fun unfinished(pcm: Long): Boolean = riffSize == 0L || (dataSize == 0L && pcm > 0)
+    }
+
+    private fun layout(raf: RandomAccessFile): Layout? {
         val head = ByteArray(12)
+        raf.seek(0)
         if (raf.length() < 12 || raf.read(head) < 12 || String(head, 0, 4, Charsets.US_ASCII) != "RIFF" || String(head, 8, 4, Charsets.US_ASCII) != "WAVE") return null
-        val riffSize = le32(head, 4)
         var pos = 12L
-        var dataOffset = -1L
-        var dataSize = 0L
         val chunk = ByteArray(8)
         while (pos + 8 <= raf.length()) {
             raf.seek(pos)
             raf.readFully(chunk)
             val size = le32(chunk, 4)
-            if (String(chunk, 0, 4, Charsets.US_ASCII) == "data") {
-                dataOffset = pos + 8
-                dataSize = size
-                break
-            }
-
+            if (String(chunk, 0, 4, Charsets.US_ASCII) == "data") return Layout(le32(head, 4), pos + 8, size)
             pos += 8 + size + (size and 1)
         }
 
-        if (dataOffset < 0) return null
-        val pcm = (raf.length() - dataOffset) and 1L.inv()
-        if (riffSize != 0L && !(dataSize == 0L && pcm > 0)) return null // finished
-        raf.setLength(dataOffset + pcm)
-        raf.seek(4)
-        raf.write(le32Bytes(dataOffset + pcm - 8))
-        raf.seek(dataOffset - 4)
-        raf.write(le32Bytes(pcm))
-        raf.fd.sync()
-        pcm
+        return null
     }
 
     private fun le32(b: ByteArray, at: Int): Long = ByteBuffer.wrap(b, at, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL

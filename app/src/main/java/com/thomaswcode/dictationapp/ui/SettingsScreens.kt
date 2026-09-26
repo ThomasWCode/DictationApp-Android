@@ -452,6 +452,7 @@ fun ApiSettingsScreen(onBack: () -> Unit) {
                         groqKey.trim().ifEmpty { graph.keys.llmKey().orEmpty() },
                         baseUrl,
                         model,
+                        fallbacks,
                     )
                     testing = false
                 }
@@ -511,8 +512,12 @@ private fun KeyEditor(value: String, onValue: (String) -> Unit, stored: Boolean,
     }
 }
 
-/** Mirrors Windows' "Test keys": a streaming token proves the AssemblyAI key, a tiny completion proves Groq. */
-private suspend fun testKeys(graph: com.thomaswcode.dictationapp.AppGraph, assemblyKey: String, groqKey: String, baseUrl: String, model: String): String {
+/**
+ * Mirrors Windows' "Test keys": a streaming token proves the AssemblyAI key, and a tiny completion with every model of
+ * the chain proves the Groq key and each model together, so a fallback that would fail (retired, not allowed for the
+ * key) is found now rather than mid-dictation.
+ */
+private suspend fun testKeys(graph: com.thomaswcode.dictationapp.AppGraph, assemblyKey: String, groqKey: String, baseUrl: String, model: String, fallbacks: String): String {
     if (assemblyKey.isEmpty() && groqKey.isEmpty()) return "Enter at least one key first."
     val parts = mutableListOf<String>()
     try {
@@ -526,24 +531,39 @@ private suspend fun testKeys(graph: com.thomaswcode.dictationapp.AppGraph, assem
         if (groqKey.isEmpty()) {
             parts += "Groq: no key (cleanup falls back to raw text)."
         } else {
-            val m = model.trim().ifEmpty { AppSettings.DEFAULT_LLM_MODEL }
             val base = baseUrl.trim().ifEmpty { AppSettings.DEFAULT_LLM_BASE_URL }.trimEnd('/') + "/"
-            val body: JsonObject = buildJsonObject {
-                put("model", m)
-                putJsonArray("messages") {
-                    addJsonObject {
-                        put("role", "user")
-                        put("content", "Reply OK")
+            val primary = model.trim().ifEmpty { AppSettings.DEFAULT_LLM_MODEL }
+            val chain = (listOf(primary) + fallbacks.split(',').map { it.trim() }.filter { it.isNotEmpty() }).distinctBy { it.lowercase() }
+            val results = mutableListOf<String>()
+            for (m in chain) {
+                val body: JsonObject = buildJsonObject {
+                    put("model", m)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            put("content", "Reply OK")
+                        }
                     }
+                    put("max_tokens", 8)
+                    LlmPostProcessor.reasoningEffortFor(m)?.let { put("reasoning_effort", JsonPrimitive(it)) }
                 }
-                put("max_tokens", 8)
-                LlmPostProcessor.reasoningEffortFor(m)?.let { put("reasoning_effort", JsonPrimitive(it)) }
+                val req = Request.Builder().url(base + "chat/completions").header("Authorization", "Bearer $groqKey")
+                    .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+                val code = graph.http.newCall(req).await().use { resp ->
+                    results += if (resp.isSuccessful) "$m OK" else "$m: " + when (resp.code) {
+                        401 -> "key rejected"
+                        403 -> "this key may not use the model (allow it in the Groq console, or pick another)"
+                        404 -> "model not found or retired; pick one from the free tier"
+                        429 -> "rate limited (the free tier caps requests and tokens per minute and per day); try again later"
+                        else -> "HTTP ${resp.code} ${resp.body?.string().orEmpty().take(100)}"
+                    }
+                    resp.code
+                }
+
+                if (code == 401) break // the key itself is rejected: every other model would say the same
             }
-            val req = Request.Builder().url(base + "chat/completions").header("Authorization", "Bearer $groqKey")
-                .post(body.toString().toRequestBody("application/json".toMediaType())).build()
-            graph.http.newCall(req).await().use { resp ->
-                parts += if (resp.isSuccessful) "Groq: OK ($m)." else "Groq: rejected (HTTP ${resp.code}): ${resp.body?.string().orEmpty().take(160)}"
-            }
+
+            parts += "Groq: " + results.joinToString("; ") + "."
         }
     } catch (e: Exception) {
         parts += "Test failed: ${e.message}"

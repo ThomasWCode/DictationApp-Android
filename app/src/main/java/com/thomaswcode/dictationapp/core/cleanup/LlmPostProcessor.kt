@@ -1,5 +1,6 @@
 package com.thomaswcode.dictationapp.core.cleanup
 
+import com.thomaswcode.dictationapp.core.transcription.TranscriptAssembler
 import com.thomaswcode.dictationapp.core.Logger
 import com.thomaswcode.dictationapp.core.settings.ApiKeyProvider
 import com.thomaswcode.dictationapp.core.settings.AppSettings
@@ -73,8 +74,17 @@ class LlmPostProcessor(
             return PostProcessResult(fallback, false, null, "no-model")
         }
 
+        // The model sees where the speaker paused, so it can rejoin a sentence the transcriber ended at a pause to think.
+        // Not at None, which keeps the transcript's punctuation even when a tone runs the LLM.
+        val marked = request.pauseMarkedTranscript
+        // Marked only when turns were actually joined (the texts differ), and never when the speaker's own words contain
+        // the marker, which would otherwise be treated as a pause and removed.
+        val input = if (request.level != CleanupLevel.None && marked != null && marked != rawTranscript &&
+            !rawTranscript.contains(TranscriptAssembler.PAUSE_MARKER, ignoreCase = true)
+        ) marked else rawTranscript
+        val pauseMarkers = input !== rawTranscript
         val systemPrompt = PromptBuilder.buildSystemPrompt(
-            PromptContext(request.level, request.tone, request.keyterms, request.appName, request.url, request.appHint),
+            PromptContext(request.level, request.tone, request.keyterms, request.appName, request.url, request.appHint, pauseMarkers),
         )
         val endpoint = baseUrl.resolve("chat/completions")!!
         val started = System.nanoTime()
@@ -83,7 +93,7 @@ class LlmPostProcessor(
         try {
             return withTimeout(totalTimeoutMs) {
                 for (model in models) {
-                    val body = requestBody(model, systemPrompt, rawTranscript)
+                    val body = requestBody(model, systemPrompt, input)
                     val req = Request.Builder()
                         .url(endpoint)
                         .header("Authorization", "Bearer $key")
@@ -106,7 +116,8 @@ class LlmPostProcessor(
                             }
 
                             val parsed = parseChat(text)
-                            val validation = OutputValidator.validate(rawTranscript, parsed.content)
+                            // Markers removed first, so the checks see exactly the text that would be inserted.
+                            val validation = OutputValidator.validate(rawTranscript, parsed.content?.let { if (pauseMarkers) TranscriptAssembler.removePauseMarkers(it) else it })
                             if (!validation.isValid) {
                                 lastReason = "$model:invalid-${validation.reason}"
                                 // Reason and size only: log files outlive the history retention, so no dictated text.
@@ -115,7 +126,7 @@ class LlmPostProcessor(
                             }
 
                             val elapsed = (System.nanoTime() - started) / 1_000_000
-                            logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
+                            logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, pauses=$pauseMarkers, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
                             return@withTimeout PostProcessResult(validation.text, true, model, null, parsed.promptTokens, parsed.completionTokens)
                         }
                     } catch (e: IOException) {

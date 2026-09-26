@@ -297,7 +297,7 @@ fun StyleSettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        Hint("App rules override these per app. None with Neutral never calls the AI. If the AI is unavailable the raw transcript is inserted and the bubble flashes amber (cleanup skipped).")
+        Hint("Light and above rejoin a sentence the transcriber cut in two where you paused to think (the AI is told where each pause was). App rules override these per app. None with Neutral never calls the AI. If the AI is unavailable the raw transcript is inserted and the bubble flashes amber (cleanup skipped).")
     }
 }
 
@@ -309,8 +309,8 @@ fun toneDescription(tone: Tone): String = when (tone) {
 
 fun levelDescription(level: CleanupLevel): String = when (level) {
     CleanupLevel.None -> "Spoken commands only (\"new line\", \"period\"…), no AI call."
-    CleanupLevel.Light -> "Remove fillers and false starts, fix punctuation."
-    CleanupLevel.Medium -> "Also fix grammar and split run-on sentences."
+    CleanupLevel.Light -> "Remove fillers and false starts, fix punctuation, rejoin sentences split by pauses."
+    CleanupLevel.Medium -> "Also fix grammar and break up genuinely run-on sentences."
     CleanupLevel.High -> "Also tighten wording and add paragraphs."
 }
 

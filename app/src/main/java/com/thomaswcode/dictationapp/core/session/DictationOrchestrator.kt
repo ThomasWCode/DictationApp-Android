@@ -354,7 +354,7 @@ class DictationOrchestrator(
             record.tone = s.tone
             record.level = s.level
             val keyterms = KeytermsSelector.select(settings.dictionary)
-            val request = PostProcessRequest(s.level, s.tone, keyterms, s.context.appName, s.context.url, s.rule.hint)
+            val request = PostProcessRequest(s.level, s.tone, keyterms, s.context.appName, s.context.url, s.rule.hint, pauseMarkedTranscript = s.assembler.pauseMarkedText)
             val result = postProcessor.process(rawText, request)
             record.cleanedText = if (result.applied) result.text else ""
             record.llmModel = result.model
@@ -581,7 +581,7 @@ class DictationOrchestrator(
                 return false
             }
 
-            val request = PostProcessRequest(record.level, record.tone, KeytermsSelector.select(settings.dictionary), record.appName, record.url, null)
+            val request = PostProcessRequest(record.level, record.tone, KeytermsSelector.select(settings.dictionary), record.appName, record.url, null, pauseMarkedTranscript = transcript.pauseMarkedText)
             val result = postProcessor.process(transcript.text, request)
             clipboard.setText(result.text)
             record.rawTranscript = transcript.text
@@ -643,7 +643,7 @@ class DictationOrchestrator(
             }
 
             val termination = transcriber.shutdown(HANDSHAKE_CAP_MS)
-            WavTranscription(assembler.finalText, bytes.get() * 1000 / (AudioFrame.SAMPLE_RATE * 2), transcriber.connectLatencyMs, termination, clock() - started)
+            WavTranscription(assembler.finalText, bytes.get() * 1000 / (AudioFrame.SAMPLE_RATE * 2), transcriber.connectLatencyMs, termination, clock() - started, assembler.pauseMarkedText)
         } finally {
             capture.close()
             transcriber.abort()
@@ -745,4 +745,5 @@ data class WavTranscription(
     val connectLatencyMs: Long?,
     val termination: TerminationMessage?,
     val wallClockMs: Long,
+    val pauseMarkedText: String? = null,
 )

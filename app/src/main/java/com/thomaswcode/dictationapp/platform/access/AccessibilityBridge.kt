@@ -13,6 +13,7 @@ import com.thomaswcode.dictationapp.core.insertion.InsertionOutcome
 import com.thomaswcode.dictationapp.core.insertion.InsertionResult
 import com.thomaswcode.dictationapp.core.insertion.InsertionTextFormatter
 import com.thomaswcode.dictationapp.core.insertion.TextInserter
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -26,6 +27,8 @@ import java.util.concurrent.ConcurrentHashMap
 class AccessibilityBridge(
     private val clipboard: Clipboard,
     private val logger: Logger,
+    /** Accessibility nodes are used on the main thread; replaceable so tests can run the insertion routes directly. */
+    private val main: CoroutineDispatcher = Dispatchers.Main,
 ) : ForegroundContextProvider, TextInserter {
     @Volatile var service: AccessibilityService? = null
 
@@ -35,7 +38,7 @@ class AccessibilityBridge(
 
     val isConnected: Boolean get() = service != null
 
-    override suspend fun capture(): ForegroundContext = withContext(Dispatchers.Main) {
+    override suspend fun capture(): ForegroundContext = withContext(main) {
         val svc = service ?: return@withContext ForegroundContext.Unknown
         val focus = focusedField(svc)
         val pkg = focus?.packageName?.toString() ?: svc.rootInActiveWindow?.packageName?.toString().orEmpty()
@@ -59,20 +62,26 @@ class AccessibilityBridge(
         )
     }
 
-    override suspend fun insert(text: String, target: ForegroundContext, method: InsertMethod): InsertionResult = withContext(Dispatchers.Main) {
+    override suspend fun insert(text: String, target: ForegroundContext, method: InsertMethod): InsertionResult = withContext(main) {
         val svc = service
-        val node = svc?.let { focusedField(it) }?.takeIf { FieldInspector.isEditableField(it) }
-            ?: (target.target as? AccessibilityNodeInfo)?.takeIf { it.refresh() && FieldInspector.isEditableField(it) }
+        val focused = svc?.let { focusedField(it) }?.takeIf { FieldInspector.isEditableField(it) }
+
+        // No field has input focus (focus went nowhere, e.g. the app cleared it when the keyboard closed): the field
+        // the dictation started in, if it is still on screen (refresh fails for a window that is gone or covered).
+        val node = focused ?: (target.target as? AccessibilityNodeInfo)?.takeIf { it.refresh() && FieldInspector.isEditableField(it) }
         if (node == null) {
             clipboard.setText(text)
             return@withContext InsertionResult(InsertionOutcome.CopiedOnly, "No text field has focus, text copied", text)
         }
 
+        val fromFallback = focused == null
+        if (fromFallback) logger.info("No field has input focus; using the field the dictation started in (${node.className} in ${node.packageName})")
         if (FieldInspector.isSecret(node)) {
             clipboard.setText(text)
             return@withContext InsertionResult(InsertionOutcome.CopiedOnly, "Not typing into a password field, text copied", text)
         }
 
+        node.refresh() // past the accessibility cache: the field's text as it is now
         val key = FieldInspector.fieldKey(node)
         val reported = FieldInspector.readableText(node)
         var current = reported
@@ -81,6 +90,10 @@ class AccessibilityBridge(
         val cursorReported = node.textSelectionStart >= 0 && node.textSelectionEnd >= 0
         val direct = method == InsertMethod.Direct && FieldInspector.supportsSetText(node) && !FieldInspector.inWebView(node)
         val placeholder = current != null && FieldInspector.showsPlaceholder(node, current, splicing = direct)
+
+        // Shaped like WhatsApp's empty chat box but not proven empty: its text is kept (it may be a draft) and the
+        // dictation goes at its end, and since that may include a placeholder, the text is left on the clipboard too.
+        val unsure = !placeholder && current != null && FieldInspector.looksLikeStandIn(node, current)
         if (placeholder) {
             logger.info("${node.className} in ${node.packageName} reports its placeholder as text; the field is empty")
             current = ""
@@ -103,19 +116,35 @@ class AccessibilityBridge(
             val newText = current.substring(0, selection.first) + formatted + current.substring(selection.second)
             if (setTextVerified(node, newText, selection.first + formatted.length, before = current)) {
                 formatter.remember(key, formatted)
+                if (unsure) {
+                    clipboard.setText(formatted.trimStart()) // for pasting by hand, so without the joining space
+                    logger.info("${node.className} in ${node.packageName} may show a placeholder; text kept, dictation added at its end and copied")
+                    return@withContext InsertionResult(InsertionOutcome.Inserted, "Added at the end of the field's text and also copied, in case that text was a placeholder", formatted, leftOnClipboard = true)
+                }
+
                 return@withContext InsertionResult(InsertionOutcome.Inserted, null, formatted)
             }
 
             logger.info("SET_TEXT was ignored by ${node.className} in ${node.packageName}; pasting instead")
         }
 
-        // A stand-in with no cursor (WhatsApp's empty chat box) refuses a paste, since TextView pastes only at a
-        // cursor, but its real text is empty, so the dictation becomes its text and the clipboard is left alone.
-        if (placeholder && !cursorReported && FieldInspector.supportsSetText(node) &&
+        // A proven-empty stand-in with no cursor (WhatsApp's empty chat box) refuses a paste, since TextView pastes only
+        // at a cursor, so the dictation becomes its text and the clipboard is left alone. This runs even when an app
+        // rule says Paste, which such a field cannot take. A placeholder found only by the cursor check is pasted.
+        if (placeholder && !cursorReported && FieldInspector.supportsSetText(node) && !FieldInspector.inWebView(node) &&
+            FieldInspector.reportsTextWithoutCursor(node, reported.orEmpty()) &&
             setTextVerified(node, formatted, formatted.length, before = reported.orEmpty())
         ) {
             formatter.remember(key, formatted)
             return@withContext InsertionResult(InsertionOutcome.Inserted, null, formatted)
+        }
+
+        // A field the user has left (no input focus any more) is not pasted into: Chromium reports a paste into a
+        // blurred web field as done although nothing arrives. The text goes to the clipboard instead.
+        if (fromFallback && !node.isFocused) {
+            val copied = formatted.trimStart()
+            clipboard.setText(copied)
+            return@withContext InsertionResult(InsertionOutcome.CopiedOnly, "The field lost focus, text copied", copied)
         }
 
         // Paste: Android does not let a background app read the clipboard, so it cannot be restored afterwards.
@@ -124,7 +153,9 @@ class AccessibilityBridge(
             formatter.remember(key, formatted)
             InsertionResult(InsertionOutcome.Inserted, null, formatted)
         } else {
-            InsertionResult(InsertionOutcome.CopiedOnly, "This field does not accept pasting, text copied", formatted)
+            val copied = formatted.trimStart()
+            if (copied != formatted) clipboard.setText(copied) // it will be pasted by hand, so without the joining space
+            InsertionResult(InsertionOutcome.CopiedOnly, "This field does not accept pasting, text copied", copied)
         }
     }
 

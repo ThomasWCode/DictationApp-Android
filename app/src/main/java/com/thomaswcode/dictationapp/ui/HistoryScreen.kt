@@ -59,8 +59,6 @@ import androidx.navigation.NavHostController
 import com.thomaswcode.dictationapp.core.history.DictationRecord
 import com.thomaswcode.dictationapp.core.history.HistoryStats
 import com.thomaswcode.dictationapp.core.history.RecordStatus
-import com.thomaswcode.dictationapp.core.insertion.ToastKind
-import com.thomaswcode.dictationapp.core.session.DictationOrchestrator
 import com.thomaswcode.dictationapp.platform.audio.WavPlayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -205,14 +203,8 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
                 (context as? Activity)?.moveTaskToBack(true)
                 graph.scope.launch {
                     delay(700)
-                    val target = graph.bridge.capture()
-                    if (target.isEditable && !target.isPassword) {
-                        // The destination app's rule decides how the text goes in (e.g. Paste for a rich editor).
-                        graph.bridge.insert(r.displayText, target, DictationOrchestrator.insertMethodFor(target, graph.settings.current))
-                    } else {
-                        graph.clipboard.setText(r.displayText)
-                        graph.notifier.toast("Copied to clipboard", "No text field has focus.", ToastKind.Info)
-                    }
+                    // The same delivery as a dictation's: the destination app's rule, the same checks and toasts.
+                    graph.orchestrator.reinsert(r.displayText)
                 }
             }
             ActionButton(Icons.Rounded.Refresh, "Retry", enabled = !busy && r.hasAudio && (r.status == RecordStatus.Failed || r.status == RecordStatus.Pending)) {

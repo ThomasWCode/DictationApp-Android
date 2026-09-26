@@ -174,9 +174,12 @@ class FakeInserter : TextInserter {
     val inserted = CopyOnWriteArrayList<Pair<String, InsertMethod>>()
     var outcome = InsertionOutcome.Inserted
 
+    /** Inserted, but not sure it landed as intended, so also left on the clipboard. */
+    var leftOnClipboard = false
+
     override suspend fun insert(text: String, target: ForegroundContext, method: InsertMethod): InsertionResult {
         inserted += text to method
-        return InsertionResult(outcome, if (outcome == InsertionOutcome.Inserted) null else "nope", text)
+        return InsertionResult(outcome, if (outcome == InsertionOutcome.Inserted) null else "nope", text, leftOnClipboard)
     }
 }
 
@@ -558,6 +561,59 @@ class DictationOrchestratorTest {
         dictate("secret words")
         assertTrue(inserter.inserted.isEmpty())
         assertEquals(RecordStatus.CopiedOnly, history.records.single().status)
+        assertTrue(notifier.toasts.any { it.first == "Copied to clipboard" && it.second.contains("password") })
+    }
+
+    @Test
+    fun anInsertionThatFailsIsCopiedAndReported() {
+        inserter.outcome = InsertionOutcome.Failed
+        start()
+        dictate("Keep me.")
+        val record = history.records.single()
+        assertEquals(RecordStatus.Failed, record.status)
+        assertEquals("nope", record.failureReason)
+        assertEquals(listOf("KEEP ME."), clipboard.texts.toList())
+        assertTrue(notifier.toasts.any { it.first == "Could not insert" && it.second.endsWith("Text copied to the clipboard.") })
+    }
+
+    @Test
+    fun anInsertionThatMayNotHaveLandedAsIntendedSaysItWasAlsoCopied() {
+        inserter.leftOnClipboard = true
+        start()
+        dictate("Maybe.")
+        assertEquals(RecordStatus.Inserted, history.records.single().status)
+        assertEquals("also copied", hub.current.badge)
+        assertTrue(notifier.toasts.isEmpty())
+    }
+
+    @Test
+    fun historyInsertGoesThroughTheSameDeliveryWithTheDestinationRule() {
+        settings.update { it.copy(appRules = listOf(AppRule(packageGlob = "com.google.android.gm", insertMethod = InsertMethod.Paste))) }
+        context = editable.copy(packageName = "com.google.android.gm", appLabel = "Gmail")
+        start()
+
+        // The stored text's joining space belonged to the field it first went into.
+        val result = runBlocking { orchestrator.reinsert(" Stored words.") }
+        assertEquals(InsertionOutcome.Inserted, result.outcome)
+        assertEquals(listOf("Stored words." to InsertMethod.Paste), inserter.inserted.toList())
+        assertTrue(history.records.isEmpty())
+
+        context = editable.copy(isEditable = false, editableReason = "no-input-focus")
+        assertEquals(InsertionOutcome.CopiedOnly, runBlocking { orchestrator.reinsert(" Stored words.") }.outcome)
+        assertEquals(listOf("Stored words."), clipboard.texts.toList())
+        assertTrue(notifier.toasts.any { it.first == "Copied to clipboard" })
+    }
+
+    @Test
+    fun historyInsertWaitsForTheDictationToFinish() {
+        start()
+        orchestrator.press()
+        waitForArmed()
+        assertEquals(InsertionOutcome.Failed, runBlocking { orchestrator.reinsert("Stored words.") }.outcome)
+        assertTrue(inserter.inserted.isEmpty())
+        assertTrue(notifier.toasts.any { it.second == "Finish the current dictation first." })
+        orchestrator.cancel()
+        waitForIdleSession()
     }
 
     @Test

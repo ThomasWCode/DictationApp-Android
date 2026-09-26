@@ -51,8 +51,17 @@ fun interface ForegroundContextProvider {
 
 enum class InsertionOutcome { Inserted, CopiedOnly, Failed }
 
-/** [insertedText] is what actually went into the field, including any joining space. */
-data class InsertionResult(val outcome: InsertionOutcome, val reason: String? = null, val insertedText: String? = null)
+/**
+ * [insertedText] is what actually went into the field, including any joining space. [leftOnClipboard]: inserted, but
+ * the app could not be sure it landed as intended, so the text was also left on the clipboard (the user's choice for
+ * uncertain insertions).
+ */
+data class InsertionResult(
+    val outcome: InsertionOutcome,
+    val reason: String? = null,
+    val insertedText: String? = null,
+    val leftOnClipboard: Boolean = false,
+)
 
 interface TextInserter {
     /**

@@ -419,29 +419,23 @@ class DictationOrchestrator(
                 s.rule.insertMethod
             }
 
-            val insertion = if (target.isEditable && !target.isPassword) {
-                inserter.insert(result.text, target, insertMethod)
-            } else {
-                clipboard.setText(result.text)
-                InsertionResult(InsertionOutcome.CopiedOnly, "No text field has focus, text copied", result.text)
-            }
-
+            val insertion = deliver(result.text, target, insertMethod)
+            s.mark("insert")
             record.insertedText = insertion.insertedText ?: result.text
+            var endBadge = badge
             val trigger = when (insertion.outcome) {
                 InsertionOutcome.Inserted -> {
                     record.status = RecordStatus.Inserted
+                    if (insertion.leftOnClipboard) endBadge = listOfNotNull(badge, "also copied").joinToString(" · ")
                     DictationTrigger.Inserted
                 }
                 InsertionOutcome.CopiedOnly -> {
                     record.status = RecordStatus.CopiedOnly
-                    notifier.toast("Copied to clipboard", insertion.reason ?: "Paste it where you need it.", ToastKind.Info)
                     DictationTrigger.CopiedOnly
                 }
                 InsertionOutcome.Failed -> {
                     record.status = RecordStatus.Failed
                     record.failureReason = appendReason(record.failureReason, insertion.reason)
-                    clipboard.setText(record.insertedText)
-                    notifier.toast("Could not insert", (insertion.reason ?: "Unknown error") + ". Text copied to the clipboard.", ToastKind.Warning)
                     DictationTrigger.Failed
                 }
             }
@@ -450,7 +444,7 @@ class DictationOrchestrator(
             if (saveRecord(record)) sink?.complete()
             bumpDictionaryUsage(keyterms, rawText)
             logger.info("Dictation ${record.status}: ${countWords(record.insertedText)} words, ${"%.1f".format(audioSeconds)}s audio, llm=${result.model ?: "none"} (ms since the press: ${s.timings()})")
-            finish(s, trigger, badge)
+            finish(s, trigger, endBadge)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -463,6 +457,84 @@ class DictationOrchestrator(
             runCatching { sink?.close() }
             runCatching { transcriber?.abort() }
             finish(s, DictationTrigger.Failed, null)
+        }
+    }
+
+    /**
+     * History's Insert: into the field that has focus now, with the same checks, insertion method (the destination
+     * app's rule) and outcome toasts as a live dictation. The record itself is not changed.
+     */
+    suspend fun reinsert(text: String): InsertionResult {
+        if (!machine.isIdle) {
+            notifier.toast("Insert", "Finish the current dictation first.", ToastKind.Warning)
+            return InsertionResult(InsertionOutcome.Failed, "A dictation is running")
+        }
+
+        val target = safeCapture()
+        return try {
+            // The stored text carries the spacing of where it first went; the field it goes into now decides afresh.
+            val insertion = deliver(text.trimStart(), target, insertMethodFor(target, settings.current))
+            if (insertion.outcome == InsertionOutcome.Inserted && insertion.leftOnClipboard) {
+                notifier.toast("Inserted and copied", insertion.reason ?: "The text is on the clipboard as well.", ToastKind.Info)
+            }
+
+            logger.info("History Insert into ${target.packageName}: ${insertion.outcome}")
+            insertion
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.error("History Insert failed", e)
+            notifier.toast("Could not insert", e.message ?: e.javaClass.simpleName, ToastKind.Warning)
+            InsertionResult(InsertionOutcome.Failed, e.message)
+        }
+    }
+
+    /**
+     * Delivers [text] into [target]: through the inserter when it is an editable field that is not a password field,
+     * onto the clipboard otherwise, and onto the clipboard as well when the insertion fails. Shows the toast for a copy
+     * or a failure. Clipboard writers take turns, and a delivery, once started, is never cancelled half-way: it is the
+     * commit point of a dictation.
+     */
+    private suspend fun deliver(text: String, target: ForegroundContext, method: InsertMethod): InsertionResult = withContext(NonCancellable) {
+        var copiedAfterFailure = false
+        val insertion = clipboardGate.withLock {
+            val result = when {
+                !target.isEditable -> copy(text, "No text field has focus, text copied")
+                target.isPassword -> copy(text, "Not typing into a password field, text copied")
+                else -> inserter.insert(text, target, method)
+            }
+
+            if (result.outcome == InsertionOutcome.Failed && target.isEditable && !target.isPassword) {
+                copiedAfterFailure = copy(result.insertedText ?: text, null).outcome == InsertionOutcome.CopiedOnly
+            }
+
+            result
+        }
+
+        when (insertion.outcome) {
+            InsertionOutcome.CopiedOnly -> notifier.toast("Copied to clipboard", insertion.reason ?: "Paste it where you need it.", ToastKind.Info)
+            InsertionOutcome.Failed -> notifier.toast(
+                "Could not insert",
+                (insertion.reason ?: "Unknown error") + if (copiedAfterFailure) ". Text copied to the clipboard." else ". Use Copy in History.",
+                ToastKind.Warning,
+            )
+            InsertionOutcome.Inserted -> Unit
+        }
+
+        insertion
+    }
+
+    /** Puts [text] on the clipboard without a joining space: it will be pasted by hand somewhere else. */
+    private suspend fun copy(text: String, reason: String?): InsertionResult {
+        val copied = text.trimStart()
+        return try {
+            clipboard.setText(copied)
+            InsertionResult(InsertionOutcome.CopiedOnly, reason, copied)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Could not put the text on the clipboard", e)
+            InsertionResult(InsertionOutcome.Failed, appendReason(reason, "the clipboard could not be set: ${e.message}"), copied)
         }
     }
 

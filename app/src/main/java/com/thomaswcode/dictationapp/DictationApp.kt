@@ -72,7 +72,7 @@ class AppGraph(val app: Application) {
     )
 
     val orchestrator = DictationOrchestrator(
-        captures = AndroidAudioCaptureFactory(app, logger),
+        captures = AndroidAudioCaptureFactory(app, logger, notifier),
         sinks = { path -> WavFileSink(path) },
         transcribers = { AssemblyAiStreamingTranscriber(http, keys, logger) },
         foreground = bridge,

@@ -51,6 +51,12 @@ class TranscriptAssemblerTest {
         assertEquals("Wait... [pause] no.", j("Wait...", "No.")) // an ellipsis is kept
         assertEquals("One turn only.", j("One turn only."))
         assertEquals("First [pause] second.", j("First.", "", "Second.")) // empty turns are skipped
+        assertEquals("Made in the [pause] U.S. mostly.", j("Made in the.", "U.S. mostly.")) // punctuated initialisms stay
+        assertEquals("We spent it on [pause] R&D, mostly.", j("We spent it on.", "R&D, mostly."))
+        assertEquals("Written in [pause] C# today.", j("Written in.", "C# today."))
+        assertEquals("Then [pause] still, it failed.", j("Then.", "Still, it failed.")) // trailing punctuation does not protect a word
+        assertEquals("\u7B2C\u4E00\u90E8\u5206 [pause] \u7B2C\u4E8C\u90E8\u5206\u3002", j("\u7B2C\u4E00\u90E8\u5206\u3002", "\u7B2C\u4E8C\u90E8\u5206\u3002")) // CJK full stop
+        assertEquals("\u4F60\u597D\uFF1F [pause] \u597D\u3002", j("\u4F60\u597D\uFF1F", "\u597D\u3002")) // CJK question mark stays
     }
 
     @Test

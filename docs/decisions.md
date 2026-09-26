@@ -105,6 +105,15 @@ repositories. The user decided five questions it raised:
 | Website rules | The focused window's address bar is read first; only address-shaped text counts (a search being typed is no website); the last address is remembered for three minutes after the bar scrolls away, refreshed at every focus and window change. An address that cannot be read at insertion is no sign of a move. | The address was remembered for ever, so a site's rule followed the user to other tabs, and a hidden bar at insertion dropped the site's insertion method. |
 | Smaller | The correction diff sets aside the shared start and end and refuses over 2,000 x 2,000 words (a quarter of Windows' budget: a phone's heap is smaller); "microphone unavailable" is told apart from "blocked"; one text-free timing line per dictation; an empty History does not sweep its recordings as orphans; CI cancels superseded pull-request runs and no longer publishes the APK; keystores are git-ignored and the README says never to uninstall. | Each was a verified finding of the review. |
 
+Verified on the Galaxy S24 (Android 16, 2026-09-26, build 0.2.0): WhatsApp's empty chat box offers only the
+rendering-info extra, so it is proven empty without its id, and a typed draft adds the character-location extra,
+a cursor and the cursor actions; a dictation into the empty box read back as exactly the dictated sentence, and
+into the box holding "Draft" as "Draft " followed by the sentence; the search bar kept its zero-width space and
+took the sentence after it by paste. With a JBL Live 770NC connected, "Default" recorded from the phone's
+microphone with no Bluetooth route requested; with the JBL chosen, the phone's microphone recorded first and the
+call link was up 0.8 s later, Android listing the app's request as the headset's output (`bt_sco_hs`, role
+output); the request was withdrawn when the test stopped.
+
 Deliberate differences from Windows: Windows proves a paste by reading back the text before the caret; Android
 sets text directly and reads the whole field back, so its uncertain case is a field that only looks like a stand-in,
 and its paste path always leaves the text on the clipboard (Android cannot restore it). The correction diff budget

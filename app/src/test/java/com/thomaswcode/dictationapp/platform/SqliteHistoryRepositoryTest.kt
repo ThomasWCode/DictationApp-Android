@@ -127,6 +127,17 @@ class SqliteHistoryRepositoryTest {
     }
 
     @Test
+    fun anEmptyHistoryDoesNotSweepItsRecordingsAsOrphans(): Unit = runBlocking {
+        // A lost or recreated database must not turn every recording into an orphan.
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "empty")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        val lonely = File(paths.audioDir, "lonely.wav").apply { writeText("x"); setLastModified(0) }
+        HistoryRetention(repo, FixedSettings(AppSettings()), paths, NoLogger, clock = { 20L * 86_400_000 }).run()
+        assertTrue(lonely.exists())
+    }
+
+    @Test
     fun retentionPassDeletesFilesAndOrphans(): Unit = runBlocking {
         val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "ret")
         val paths = AppPaths(dir)

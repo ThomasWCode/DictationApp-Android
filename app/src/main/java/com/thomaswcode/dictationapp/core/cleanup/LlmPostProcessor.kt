@@ -1,5 +1,6 @@
 package com.thomaswcode.dictationapp.core.cleanup
 
+import com.thomaswcode.dictationapp.core.transcription.TranscriptAssembler
 import com.thomaswcode.dictationapp.core.Logger
 import com.thomaswcode.dictationapp.core.settings.ApiKeyProvider
 import com.thomaswcode.dictationapp.core.settings.AppSettings
@@ -73,8 +74,13 @@ class LlmPostProcessor(
             return PostProcessResult(fallback, false, null, "no-model")
         }
 
+        // The model sees where the speaker paused, so it can rejoin a sentence the transcriber ended at a pause to think.
+        // Not at None, which keeps the transcript's punctuation even when a tone runs the LLM.
+        val marked = request.pauseMarkedTranscript
+        val input = if (request.level != CleanupLevel.None && marked != null && marked.contains(TranscriptAssembler.PAUSE_MARKER)) marked else rawTranscript
+        val pauseMarkers = input !== rawTranscript
         val systemPrompt = PromptBuilder.buildSystemPrompt(
-            PromptContext(request.level, request.tone, request.keyterms, request.appName, request.url, request.appHint),
+            PromptContext(request.level, request.tone, request.keyterms, request.appName, request.url, request.appHint, pauseMarkers),
         )
         val endpoint = baseUrl.resolve("chat/completions")!!
         val started = System.nanoTime()
@@ -83,7 +89,7 @@ class LlmPostProcessor(
         try {
             return withTimeout(totalTimeoutMs) {
                 for (model in models) {
-                    val body = requestBody(model, systemPrompt, rawTranscript)
+                    val body = requestBody(model, systemPrompt, input)
                     val req = Request.Builder()
                         .url(endpoint)
                         .header("Authorization", "Bearer $key")
@@ -115,8 +121,8 @@ class LlmPostProcessor(
                             }
 
                             val elapsed = (System.nanoTime() - started) / 1_000_000
-                            logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
-                            return@withTimeout PostProcessResult(validation.text, true, model, null, parsed.promptTokens, parsed.completionTokens)
+                            logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, pauses=$pauseMarkers, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
+                            return@withTimeout PostProcessResult(TranscriptAssembler.removePauseMarkers(validation.text), true, model, null, parsed.promptTokens, parsed.completionTokens)
                         }
                     } catch (e: IOException) {
                         lastReason = if (e is java.io.InterruptedIOException) "$model:timeout" else "$model:${e.javaClass.simpleName}"

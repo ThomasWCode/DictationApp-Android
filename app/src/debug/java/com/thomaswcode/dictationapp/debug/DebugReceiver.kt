@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.thomaswcode.dictationapp.DictationApp
 import com.thomaswcode.dictationapp.platform.access.FieldInspector
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +25,9 @@ import kotlinx.coroutines.launch
  *                                                     showing TEXT, e.g. a search bar's placeholder; probe
  *                                                     moves the cursor to each position and back; clear
  *                                                     empties the focused field (tidying up after a test)
+ * - DUMP_WINDOWS                                      log every window the service can see, with how much of its
+ *                                                     tree it exposes, and the raw input focus (an app that hides
+ *                                                     its views from non-tool services shows few or no nodes)
  *
  * WAV files must be readable by the app, e.g. pushed to /sdcard/Android/data/<package>/files/.
  */
@@ -111,7 +115,48 @@ class DebugReceiver : BroadcastReceiver() {
                     }
                 }
             }
+            ACTION_DUMP_WINDOWS -> {
+                val pending = goAsync()
+                graph.scope.launch(Dispatchers.Main) {
+                    try {
+                        val svc = graph.bridge.service ?: return@launch log.warn("Debug DUMP_WINDOWS: accessibility service not connected")
+                        val input = runCatching { svc.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
+                        Log.i(TAG, "Debug windows: input focus=${input?.let { "${it.packageName}/${it.className} window=${it.windowId}" }} active root=${svc.rootInActiveWindow?.let { "${it.packageName}/${it.className} window=${it.windowId}" }}")
+                        runCatching { svc.windows }.getOrDefault(emptyList()).forEach { w ->
+                            val root = w.root
+                            val (nodes, editable) = root?.let(::census) ?: (0 to 0)
+                            Log.i(TAG, "Debug windows: #${w.id} ${windowType(w.type)} layer=${w.layer} active=${w.isActive} focused=${w.isFocused} title=${w.title} root=${root?.packageName}/${root?.className} children=${root?.childCount} nodes=$nodes editable=$editable")
+                        }
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
         }
+    }
+
+    /** Nodes and editable nodes in a window's tree (bounded). */
+    private fun census(root: AccessibilityNodeInfo): Pair<Int, Int> {
+        val queue = ArrayDeque<AccessibilityNodeInfo>().apply { add(root) }
+        var nodes = 0
+        var editable = 0
+        while (queue.isNotEmpty() && nodes < 3000) {
+            val n = queue.removeFirst()
+            nodes++
+            if (n.isEditable) editable++
+            for (i in 0 until n.childCount) n.getChild(i)?.let(queue::addLast)
+        }
+
+        return nodes to editable
+    }
+
+    private fun windowType(type: Int): String = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> "APPLICATION"
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "INPUT_METHOD"
+        AccessibilityWindowInfo.TYPE_SYSTEM -> "SYSTEM"
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "A11Y_OVERLAY"
+        AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "DIVIDER"
+        else -> "type$type"
     }
 
     /** Structure only by default: the field's text is printed only when asked for. */
@@ -176,5 +221,6 @@ class DebugReceiver : BroadcastReceiver() {
         const val ACTION_SIMULATE = "com.thomaswcode.dictationapp.debug.SIMULATE"
         const val ACTION_STREAM_TEST = "com.thomaswcode.dictationapp.debug.STREAM_TEST"
         const val ACTION_DUMP_FOCUS = "com.thomaswcode.dictationapp.debug.DUMP_FOCUS"
+        const val ACTION_DUMP_WINDOWS = "com.thomaswcode.dictationapp.debug.DUMP_WINDOWS"
     }
 }

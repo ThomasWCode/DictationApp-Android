@@ -89,6 +89,8 @@ adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.STREAM_TEST --
 adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.SIMULATE --es path /sdcard/Android/data/$pkg/files/sample.wav --ei delay 5
 # Log the focused field's structure to logcat (add --ez text true for its text, --eia probe 1,5 to test cursor moves)
 adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.DUMP_FOCUS
+# Log every window the service can see and how much of it (an app hiding its views shows a window with no tree)
+adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.DUMP_WINDOWS
 ```
 
 ## Layout

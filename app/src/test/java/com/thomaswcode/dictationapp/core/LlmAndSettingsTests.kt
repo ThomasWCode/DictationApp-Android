@@ -329,6 +329,30 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun aSaveReplacesTheFileInOneStepAndLeavesNoTempFile() {
+        val file = File(tmp.root, "settings.json")
+        val store = JsonSettingsStore(file, NoLogger)
+        store.update { it.copy(defaultTone = Tone.Formal) }
+        store.update { it.copy(defaultTone = Tone.Casual) }
+        assertEquals(Tone.Casual, JsonSettingsStore(file, NoLogger).current.defaultTone)
+        assertEquals(listOf("settings.json"), tmp.root.list()!!.toList())
+    }
+
+    @Test
+    fun aSaveThatFailsKeepsTheSettingsAndSaysWhy() {
+        // The settings folder is a file, so nothing can be written there (like a full disk).
+        val blocked = File(tmp.root, "blocked").apply { writeText("") }
+        val failures = mutableListOf<Exception>()
+        val store = JsonSettingsStore(File(blocked, "settings.json"), NoLogger) { failures += it }
+
+        val result = store.update { it.copy(defaultTone = Tone.Formal) }
+
+        assertEquals(AppSettings(), result)
+        assertEquals(AppSettings(), store.current)
+        assertEquals(1, failures.size)
+    }
+
+    @Test
     fun corruptFileIsMovedAsideAndDefaultsUsed() {
         val file = File(tmp.root, "settings.json").apply { writeText("{ not json") }
         val store = JsonSettingsStore(file, NoLogger)

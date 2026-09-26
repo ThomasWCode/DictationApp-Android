@@ -9,7 +9,10 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -19,40 +22,56 @@ interface SettingsStore {
 
     val current: AppSettings get() = flow.value
 
-    /** Applies [transform] to the latest settings and persists the result atomically. */
+    /**
+     * Applies [transform] to the latest settings and persists the result atomically; returns the settings now in force.
+     * A store that cannot save keeps the settings as they were and returns those.
+     */
     fun update(transform: (AppSettings) -> AppSettings): AppSettings
 }
 
 /**
- * JSON file store with atomic writes (write a temp file, then rename over the old one). A corrupt file is
- * moved aside and defaults are used, so a bad edit never bricks the app. Unknown keys and unknown enum
- * values are tolerated so older builds can read newer files.
+ * JSON file store with atomic writes: a temp file is written and synced to disk, then moved over the old one in a
+ * single rename, so a crash or power cut leaves the old settings or the new ones, never neither. A corrupt file is
+ * moved aside and defaults are used, so a bad edit never bricks the app. Unknown keys and unknown enum values are
+ * tolerated so older builds can read newer files. When the file cannot be written (storage full), the settings stay
+ * as they were and [onWriteFailed] hears why, rather than the button or bubble drag that asked crashing the app.
  */
-class JsonSettingsStore(private val file: File, private val logger: Logger) : SettingsStore {
+class JsonSettingsStore(
+    private val file: File,
+    private val logger: Logger,
+    private val onWriteFailed: ((Exception) -> Unit)? = null,
+) : SettingsStore {
     private val lock = Any()
     private val state = MutableStateFlow(load())
 
     override val flow: StateFlow<AppSettings> = state.asStateFlow()
 
     override fun update(transform: (AppSettings) -> AppSettings): AppSettings = synchronized(lock) {
-        val next = transform(state.value)
-        if (next != state.value) {
+        val current = state.value
+        val next = transform(current)
+        if (next == current) return current
+        try {
             write(next)
-            state.value = next
+        } catch (e: Exception) {
+            logger.error("Could not save the settings; they stay as they were", e)
+            onWriteFailed?.invoke(e)
+            return current
         }
 
+        state.value = next
         next
     }
 
     private fun write(settings: AppSettings) {
         file.parentFile?.mkdirs()
         val tmp = File(file.path + ".tmp")
-        tmp.writeText(json.encodeToString(AppSettings.serializer(), settings))
-        if (!tmp.renameTo(file)) {
-            // renameTo does not replace on every filesystem; fall back to delete + rename.
-            file.delete()
-            if (!tmp.renameTo(file)) throw IOException("Could not replace ${file.path}")
+        FileOutputStream(tmp).use { out ->
+            out.write(json.encodeToString(AppSettings.serializer(), settings).toByteArray(Charsets.UTF_8))
+            out.fd.sync()
         }
+
+        // rename(2): the old file is replaced in one step; there is never a moment with no settings file.
+        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE)
     }
 
     private fun load(): AppSettings {

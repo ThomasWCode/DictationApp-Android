@@ -84,7 +84,7 @@ class TranscriptAssembler {
                         text = lowerFirstWord(text)
                     }
 
-                    if (i < parts.size - 1 && text.endsWith('.') && !text.endsWith("..")) text = text.dropLast(1)
+                    if (i < parts.size - 1 && endsWithFullStop(text)) text = text.dropLast(1)
                     append(text)
                 }
             }
@@ -96,9 +96,21 @@ class TranscriptAssembler {
             return text.replace(markerRegex, " ").replace(spacesRegex, " ").replace(strayRegex, "").trim()
         }
 
+        /** Sentence-ending full stops, including CJK, Devanagari and Urdu ones; an ASCII ellipsis is kept. */
+        private val fullStops = charArrayOf('.', '\u3002', '\uFF61', '\u0964', '\u06D4')
+
+        private fun endsWithFullStop(text: String): Boolean =
+            text.isNotEmpty() && text.last() in fullStops && !text.endsWith("..")
+
+        /**
+         * Lower-cases the first word only when it is a plain capitalised word ("Still"): the whole word up to the next
+         * space is judged, so "I", "U.S.", "R&D", "C#", "WhatsApp" and "NASA" keep their case.
+         */
         private fun lowerFirstWord(text: String): String {
-            val word = text.takeWhile { it.isLetter() || it == '\'' }
-            if (word.isEmpty() || !word[0].isUpperCase() || word == "I" || word.startsWith("I'") || word.drop(1).any { it.isUpperCase() }) return text
+            val word = text.substringBefore(' ').trimEnd(',', ';', ':', '.', '!', '?')
+            if (word.isEmpty() || !word[0].isUpperCase() || word == "I" || word.startsWith("I'") ||
+                !word.all { it.isLetter() || it == '\'' } || word.drop(1).any { it.isUpperCase() }
+            ) return text
             return text[0].lowercaseChar() + text.substring(1)
         }
     }

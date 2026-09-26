@@ -103,6 +103,32 @@ class LlmPostProcessorTest {
     }
 
     @Test
+    fun outputIsValidatedAfterPauseMarkersAreRemoved() = runBlocking {
+        // A banned prefix hidden behind a marker, then a reply that is nothing but markers: both fall back.
+        server.enqueue(ok("[pause] Sure! Here is your text."))
+        server.enqueue(ok("[pause] [pause] [pause] [pause] [pause] [pause] [pause] [pause]"))
+        server.enqueue(ok("[pause] [pause] [pause] [pause] [pause] [pause] [pause] [pause]"))
+        val marked = request.copy(level = CleanupLevel.Light, tone = Tone.Neutral, pauseMarkedTranscript = "Typing into the box [pause] still adds a space.")
+        val result = processor().process("Typing into the box. Still adds a space.", marked)
+        assertFalse(result.applied)
+        assertEquals("Typing into the box. Still adds a space.", result.text)
+    }
+
+    @Test
+    fun literalPauseMarkersInTheSpeakersWordsAreKept() = runBlocking {
+        server.enqueue(ok("Type [pause] where the recording stops."))
+        server.enqueue(ok("Type [pause] here. Then stop."))
+        val light = request.copy(level = CleanupLevel.Light, tone = Tone.Neutral)
+        // One turn: nothing was joined, so the marked text equals the transcript and the words are left alone.
+        val result = processor().process("Type [pause] where the recording stops.", light.copy(pauseMarkedTranscript = "Type [pause] where the recording stops."))
+        assertEquals("Type [pause] where the recording stops.", result.text)
+        assertFalse(server.takeRequest().body.readUtf8().contains("marks where the speaker stopped"))
+        // Several turns, but the speaker said the marker: no markers are used at all.
+        processor().process("Type [pause] here. Then stop.", light.copy(pauseMarkedTranscript = "Type [pause] here [pause] then stop."))
+        assertFalse(server.takeRequest().body.readUtf8().contains("marks where the speaker stopped"))
+    }
+
+    @Test
     fun levelNoneKeepsTheTranscriptPunctuation() = runBlocking {
         server.enqueue(ok("Typing into the box. Still adds a space."))
         val none = request.copy(level = CleanupLevel.None, tone = Tone.Formal, pauseMarkedTranscript = "Typing into the box [pause] still adds a space.")

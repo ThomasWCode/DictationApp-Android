@@ -77,7 +77,11 @@ class LlmPostProcessor(
         // The model sees where the speaker paused, so it can rejoin a sentence the transcriber ended at a pause to think.
         // Not at None, which keeps the transcript's punctuation even when a tone runs the LLM.
         val marked = request.pauseMarkedTranscript
-        val input = if (request.level != CleanupLevel.None && marked != null && marked.contains(TranscriptAssembler.PAUSE_MARKER)) marked else rawTranscript
+        // Marked only when turns were actually joined (the texts differ), and never when the speaker's own words contain
+        // the marker, which would otherwise be treated as a pause and removed.
+        val input = if (request.level != CleanupLevel.None && marked != null && marked != rawTranscript &&
+            !rawTranscript.contains(TranscriptAssembler.PAUSE_MARKER, ignoreCase = true)
+        ) marked else rawTranscript
         val pauseMarkers = input !== rawTranscript
         val systemPrompt = PromptBuilder.buildSystemPrompt(
             PromptContext(request.level, request.tone, request.keyterms, request.appName, request.url, request.appHint, pauseMarkers),
@@ -112,7 +116,8 @@ class LlmPostProcessor(
                             }
 
                             val parsed = parseChat(text)
-                            val validation = OutputValidator.validate(rawTranscript, parsed.content)
+                            // Markers removed first, so the checks see exactly the text that would be inserted.
+                            val validation = OutputValidator.validate(rawTranscript, parsed.content?.let { if (pauseMarkers) TranscriptAssembler.removePauseMarkers(it) else it })
                             if (!validation.isValid) {
                                 lastReason = "$model:invalid-${validation.reason}"
                                 // Reason and size only: log files outlive the history retention, so no dictated text.
@@ -122,7 +127,7 @@ class LlmPostProcessor(
 
                             val elapsed = (System.nanoTime() - started) / 1_000_000
                             logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, pauses=$pauseMarkers, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
-                            return@withTimeout PostProcessResult(TranscriptAssembler.removePauseMarkers(validation.text), true, model, null, parsed.promptTokens, parsed.completionTokens)
+                            return@withTimeout PostProcessResult(validation.text, true, model, null, parsed.promptTokens, parsed.completionTokens)
                         }
                     } catch (e: IOException) {
                         lastReason = if (e is java.io.InterruptedIOException) "$model:timeout" else "$model:${e.javaClass.simpleName}"

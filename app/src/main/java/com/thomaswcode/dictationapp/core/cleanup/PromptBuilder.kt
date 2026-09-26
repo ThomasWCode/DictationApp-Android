@@ -29,8 +29,8 @@ object PromptBuilder {
             // Not at None, which keeps the transcript's wording and punctuation even when a tone runs the LLM.
             if (ctx.pauseMarkers) {
                 appendLine("   \"[pause]\" marks where the speaker stopped for a second or more, often to think in mid-sentence.")
-                appendLine("   The punctuation and capital letter the transcriber put at each pause have been removed: decide")
-                appendLine("   afresh. When the words after [pause] continue the sentence, join them into it (\"typing into the")
+                appendLine("   The full stop and capital letter the transcriber put at each pause have been removed (question and")
+                appendLine("   exclamation marks are kept): decide afresh. When the words after [pause] continue the sentence, join them into it (\"typing into the")
                 appendLine("   search box [pause] still adds a space\" -> \"Typing into the search box still adds a space.\"); when a")
                 appendLine("   new sentence starts, end the previous one and capitalise (\"I sent the report [pause] then I called")
                 appendLine("   sam\" -> \"I sent the report. Then I called Sam.\"). Restore capitals on names. Never output [pause].")

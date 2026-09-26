@@ -57,10 +57,12 @@ class AppGraph(val app: Application) {
     val history = SqliteHistoryRepository(app)
     val hub = StatusHub()
     val clipboard = AndroidClipboard(app)
-    val notifier = AndroidNotifier(app)
+    val notifier = AndroidNotifier(app, logger)
     val bridge = AccessibilityBridge(clipboard, logger)
     val llm = LlmPostProcessor(http, keys, { settings.current }, logger)
-    val retention = HistoryRetention(history, settings, paths, logger)
+    /** When this process started: recordings last written before it were left by an earlier run. */
+    private val startedAt = System.currentTimeMillis()
+    val retention = HistoryRetention(history, settings, paths, logger, notifier = notifier, runStartedAt = startedAt)
 
     /** Epoch millis until which the bubble is hidden (dragged onto the "Hide 10 min" target). */
     val snoozedUntil = MutableStateFlow(0L)

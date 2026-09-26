@@ -34,6 +34,14 @@ class SpokenCommandNormaliserTest {
     }
 
     @Test
+    fun scratchThatAfterAFullStopDropsTheSentenceItFollows() {
+        // The transcriber often ends the retracted sentence with a full stop; that sentence is the one retracted.
+        assertEquals("Send it to Alice.", SpokenCommandNormaliser.normalise("Send it to Bob. Scratch that. Send it to Alice."))
+        assertEquals("First point. Third point.", SpokenCommandNormaliser.normalise("First point. Second point. Scratch that. Third point."))
+        assertEquals("Hello there. Send it to Alice.", SpokenCommandNormaliser.normalise("Hello there. Send it to Bob, scratch that, send it to Alice."))
+    }
+
+    @Test
     fun scratchThatDropsPrecedingClause() {
         assertEquals("Meet on monday. Actually tuesday", SpokenCommandNormaliser.normalise("meet on monday. we said wednesday scratch that actually tuesday"))
         assertEquals("Tuesday", SpokenCommandNormaliser.normalise("monday scratch that tuesday"))

@@ -79,13 +79,19 @@ class FakeCapture : AudioCapture {
 
     override fun close() = stop()
 
-    fun emit(fill: Byte, peak: Float = 0.4f) = onFrame?.invoke(AudioFrame(ByteArray(AudioFrame.FRAME_BYTES) { fill }, peak, 0))
+    /** A frame from the microphone; like a real one, nothing arrives once it is stopped. */
+    fun emit(fill: Byte, peak: Float = 0.4f) {
+        if (running) onFrame?.invoke(AudioFrame(ByteArray(AudioFrame.FRAME_BYTES) { fill }, peak, 0))
+    }
 }
 
-class FakeSink(override val path: String) : AudioSink {
+class FakeSink(override val path: String, private val probe: (() -> Int)? = null) : AudioSink {
     @Volatile override var bytesWritten = 0L
 
     @Volatile var completed = false
+
+    /** What the probe said when the recording was finished (the number of saved records, say). */
+    @Volatile var probeAtComplete: Int? = null
 
     @Volatile var discarded = false
 
@@ -95,6 +101,7 @@ class FakeSink(override val path: String) : AudioSink {
 
     override fun complete() {
         completed = true
+        probeAtComplete = probe?.invoke()
     }
 
     override fun discard() {
@@ -118,6 +125,9 @@ class FakeTranscriber(private val autoConnect: Boolean = false, private val auto
 
     /** Raise a socket fault after the release, when the session no longer selects on it, then return no summary. */
     @Volatile var faultBeforeShutdown = false
+
+    /** The billed session length the Termination summary reports (0: not reported). */
+    @Volatile var sessionSeconds = 0.0
 
     @Volatile var aborted = false
     override var onTurn: ((TurnMessage) -> Unit)? = null
@@ -144,7 +154,7 @@ class FakeTranscriber(private val autoConnect: Boolean = false, private val auto
             return null
         }
 
-        return if (sendTermination) TerminationMessage(audioDurationSeconds = 3.0) else null
+        return if (sendTermination) TerminationMessage(audioDurationSeconds = 3.0, sessionDurationSeconds = sessionSeconds) else null
     }
 
     override fun abort() {
@@ -274,6 +284,20 @@ class DictationStateMachineTest {
     }
 
     @Test
+    fun cancelIsIgnoredOnceTheDictationStoppedRecording() {
+        // A discard is only possible while recording; after the release the dictation always finishes.
+        val m = DictationStateMachine()
+        m.fire(DictationTrigger.Press)
+        m.fire(DictationTrigger.BeginReceived)
+        m.fire(DictationTrigger.Release)
+        assertEquals(DictationState.Finalising, m.fire(DictationTrigger.Cancel))
+        m.fire(DictationTrigger.HandshakeComplete)
+        assertEquals(DictationState.PostProcessing, m.fire(DictationTrigger.Cancel))
+        m.fire(DictationTrigger.PostProcessed)
+        assertEquals(DictationState.Inserting, m.fire(DictationTrigger.Cancel))
+    }
+
+    @Test
     fun capReachedFinalisesAndNothingHeardGoesIdle() {
         val m = DictationStateMachine()
         m.fire(DictationTrigger.Press)
@@ -318,6 +342,9 @@ class DictationOrchestratorTest {
     private val transcribers = CopyOnWriteArrayList<FakeTranscriber>()
     private var transcriberFactory: () -> FakeTranscriber = { FakeTranscriber() }
     private var replayPath: String? = null
+    @Volatile private var replaySpeed: Double? = null
+    private var sinkProbe: (() -> Int)? = null
+    private var lookupGate: CompletableDeferred<Unit>? = null
     private val editable = ForegroundContext(7, "com.whatsapp", "WhatsApp", "Chat", null, true, false, "EditText")
     private var context = editable
     private val inserter = FakeInserter()
@@ -349,11 +376,17 @@ class DictationOrchestratorTest {
             captures = object : AudioCaptureFactory {
                 override fun createMicrophone(deviceKey: String?) = capture
 
-                override fun createWavReplay(path: String, speed: Double): AudioCapture = if (replayPath != null) WavReplayAudioCapture(path, 50.0) else capture
+                override fun createWavReplay(path: String, speed: Double): AudioCapture {
+                    replaySpeed = speed
+                    return if (replayPath != null) WavReplayAudioCapture(path, 50.0) else capture
+                }
             },
-            sinks = AudioSinkFactory { path -> FakeSink(path).also { sinks += it } },
+            sinks = AudioSinkFactory { path -> FakeSink(path, sinkProbe).also { sinks += it } },
             transcribers = StreamingTranscriberFactory { transcriberFactory().also { transcribers += it } },
-            foreground = ForegroundContextProvider { context },
+            foreground = ForegroundContextProvider {
+                lookupGate?.await()
+                context
+            },
             inserter = inserter,
             clipboard = clipboard,
             notifier = notifier,
@@ -704,6 +737,193 @@ class DictationOrchestratorTest {
     }
 
     @Test
+    fun releaseBeforeBeginStopsTheMicrophoneAtOnce() {
+        // Nothing said after the release is recorded or uploaded, even while the connection is still being set up.
+        transcriberFactory = { FakeTranscriber(autoTurnText = "Pre-release words.") }
+        start()
+        orchestrator.press()
+        waitForArmed()
+        capture.emit(1)
+        orchestrator.release()
+        waitFor("microphone stopped at the release") { !capture.running }
+        assertFalse(transcriber.isConnected)
+        capture.emit(2) // a real microphone delivers nothing after stop
+        transcriber.completeConnect()
+        waitForIdleSession()
+
+        assertEquals(1, transcriber.frames.get())
+        assertEquals(AudioFrame.FRAME_BYTES.toLong(), sink.bytesWritten)
+        assertEquals("PRE-RELEASE WORDS.", inserter.inserted.single().first)
+    }
+
+    @Test
+    fun theMicrophoneStartsBeforeTheFieldLookup() {
+        lookupGate = CompletableDeferred()
+        start()
+        orchestrator.press()
+        waitFor("microphone started while the lookup is still running") { capture.running }
+        waitFor("transcriber created") { transcribers.isNotEmpty() }
+        lookupGate!!.complete(Unit)
+        orchestrator.cancel()
+        waitForIdleSession()
+    }
+
+    @Test
+    fun aDiscardWinsOverAReleaseThatArrivedWithIt() {
+        lookupGate = CompletableDeferred()
+        start()
+        orchestrator.press()
+        waitFor("microphone started") { capture.running }
+        orchestrator.cancel()
+        orchestrator.release()
+        Thread.sleep(50)
+        lookupGate!!.complete(Unit)
+        waitForIdleSession()
+
+        assertTrue(inserter.inserted.isEmpty())
+        assertTrue(history.records.isEmpty())
+        assertTrue(transcriber.aborted)
+    }
+
+    @Test
+    fun cancelAfterTheCheckMarkIsIgnoredAndTheDictationFinishes() {
+        // A discard is only possible while recording: after ✓ the dictation always finishes.
+        post.gate = CompletableDeferred()
+        start()
+        orchestrator.press()
+        orchestrator.enterHandsFree()
+        waitForArmed()
+        capture.emit(1)
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        transcriber.raiseTurn(0, "Keep me.", endOfTurn = true, formatted = true)
+        orchestrator.release()
+        waitFor("hub shows the dictation finishing") { hub.current.state == DictationState.PostProcessing }
+        orchestrator.cancel()
+        Thread.sleep(50)
+        post.gate!!.complete(Unit)
+        waitForIdleSession()
+
+        assertEquals("KEEP ME.", inserter.inserted.single().first)
+        assertEquals(RecordStatus.Inserted, history.records.single().status)
+    }
+
+    @Test
+    fun serviceTeardownWhileRecordingKeepsTheDictationForRetry() {
+        start()
+        orchestrator.press()
+        waitForArmed()
+        capture.emit(1)
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        transcriber.raiseTurn(0, "half a thought", endOfTurn = false)
+        orchestrator.interrupt()
+        waitForIdleSession()
+
+        val record = history.records.single()
+        assertEquals(RecordStatus.Failed, record.status)
+        assertEquals(DictationOrchestrator.INTERRUPTED_REASON, record.failureReason)
+        assertEquals("half a thought", record.rawTranscript)
+        assertTrue(record.audioPath != null && sink.completed)
+        assertTrue(inserter.inserted.isEmpty())
+        assertTrue(transcriber.aborted)
+    }
+
+    @Test
+    fun serviceTeardownAfterTheReleaseLetsTheDictationFinish() {
+        post.gate = CompletableDeferred()
+        start()
+        orchestrator.press()
+        waitForArmed()
+        capture.emit(1)
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        transcriber.raiseTurn(0, "Finish me.", endOfTurn = true, formatted = true)
+        orchestrator.release()
+        waitFor("cleaning up") { hub.current.state == DictationState.PostProcessing }
+        orchestrator.interrupt()
+        post.gate!!.complete(Unit)
+        waitForIdleSession()
+
+        assertEquals(RecordStatus.Inserted, history.records.single().status)
+    }
+
+    @Test
+    fun theRecordingIsFinishedOnlyAfterItsRecordIsSaved() {
+        // Until then its header keeps the "unfinished" marker, so a crash during cleanup or insertion leaves a file the
+        // next start recovers into History instead of an orphan the sweep deletes.
+        sinkProbe = { history.records.size }
+        start()
+        dictate("Saved first.")
+        assertEquals(1, sink.probeAtComplete)
+    }
+
+    @Test
+    fun anErrorInTheSessionStillKeepsTheDictation() {
+        // An Error escaped the old catch and lost the dictation (the ICU regex crash): it is caught and saved now.
+        post.respond = { throw ExceptionInInitializerError("boom") }
+        start()
+        dictate("Kept anyway.")
+
+        val record = history.records.single()
+        assertEquals(RecordStatus.Failed, record.status)
+        assertTrue(record.audioPath != null)
+    }
+
+    @Test
+    fun aBusyMicrophoneIsNotReportedAsBlocked() {
+        start()
+        orchestrator.press()
+        waitForArmed()
+        capture.onFault?.invoke(com.thomaswcode.dictationapp.core.audio.MicrophoneUnavailableException("The microphone did not start; another app may be using it."))
+        waitForIdleSession()
+
+        assertTrue(notifier.toasts.any { it.first == "Microphone unavailable" })
+        assertFalse(notifier.micRequested)
+    }
+
+    @Test
+    fun costIsEstimatedFromTheBilledSession() {
+        transcriberFactory = { FakeTranscriber().also { it.sessionSeconds = 4.0 } }
+        start()
+        dictate("Billed.")
+        // The fake session reports 3 s of audio in a 4 s session: AssemblyAI bills the session.
+        assertEquals(com.thomaswcode.dictationapp.core.history.CostEstimator.sttCost(settings.current.speechModel, 4.0), history.records.single().costEstimate!!, 1e-9)
+    }
+
+    @Test
+    fun aRecurringCleanupProblemIsReportedOncePerRun() {
+        post.respond = { raw -> PostProcessResult(raw.uppercase(), true, "b", null, configurationProblem = "The Groq key may not use a.") }
+        start()
+        dictate("One.")
+        dictate("Two.")
+        assertEquals(1, notifier.toasts.count { it.second == "The Groq key may not use a." })
+    }
+
+    @Test
+    fun retryThatEndsWithoutASummaryKeepsTheEarlierWords() {
+        val wav = File(tmp.root, "failed.wav").path
+        WavFileSink(wav).apply {
+            write(ByteArray(AudioFrame.FRAME_BYTES * 4) { 3 })
+            complete()
+        }
+        replayPath = wav
+        transcriberFactory = { FakeTranscriber(autoConnect = true, autoTurnText = "Recov").also { it.sendTermination = false } }
+        start()
+        val id = runBlocking {
+            history.insert(DictationRecord(createdAt = 1, updatedAt = 1, status = RecordStatus.Failed, audioPath = wav, rawTranscript = "the earlier, longer words"))
+        }
+        val ok = runBlocking { orchestrator.retry(id) }
+
+        assertFalse(ok)
+        val record = history.records.single()
+        assertEquals(RecordStatus.Failed, record.status)
+        assertEquals("the earlier, longer words", record.rawTranscript)
+        assertTrue(record.failureReason!!.contains("did not finish"))
+        assertTrue(clipboard.texts.isEmpty())
+    }
+
+    @Test
     fun retryReStreamsAudioAndCopiesResult() {
         val wav = File(tmp.root, "failed.wav").path
         WavFileSink(wav).apply {
@@ -724,5 +944,8 @@ class DictationOrchestratorTest {
         assertEquals("Recovered text.", record.rawTranscript)
         assertEquals(Tone.Formal, post.requests.single().tone)
         assertTrue(notifier.toasts.any { it.first == "Retry complete" })
+        // Paced at real time: AssemblyAI cannot keep up with a faster stream.
+        assertEquals(DictationOrchestrator.RETRY_REPLAY_SPEED, replaySpeed!!, 0.0)
+        assertEquals(1.0, DictationOrchestrator.RETRY_REPLAY_SPEED, 0.0)
     }
 }

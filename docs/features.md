@@ -47,8 +47,9 @@ turn → Terminate, capped at 2.5 s).
 
 Identical to Windows (see the Windows `docs/features.md`): Groq's OpenAI-compatible API with the same system
 prompt, levels None/Light/Medium/High, tones Neutral/Formal/Casual, the regex pass for spoken commands and lists,
-the `openai/gpt-oss-120b` → `qwen/qwen3.8-27b` → `openai/gpt-oss-20b` free-tier chain (4 s per model, 8 s total),
-and output validation with raw-text fallback. A reply cut short by the token limit is never inserted, a model the
+the `openai/gpt-oss-120b` → `qwen/qwen3.8-27b` → `openai/gpt-oss-20b` free-tier chain (4 s per model, 8 s total;
+per model Groq's free tier allows 30 requests a minute, 1,000 a day, 8,000 tokens a minute and 200,000 tokens a
+day, and a 429 moves to the next model), and output validation with raw-text fallback. A reply cut short by the token limit is never inserted, a model the
 key may not use (403) moves on to the next, and a settings problem is shown once per run. Test keys tries every
 model of the chain.
 

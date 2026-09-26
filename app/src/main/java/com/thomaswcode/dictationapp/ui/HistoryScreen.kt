@@ -60,7 +60,9 @@ import com.thomaswcode.dictationapp.core.history.DictationRecord
 import com.thomaswcode.dictationapp.core.history.HistoryStats
 import com.thomaswcode.dictationapp.core.history.RecordStatus
 import com.thomaswcode.dictationapp.platform.audio.WavPlayer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -210,11 +212,15 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
             ActionButton(Icons.Rounded.Refresh, "Retry", enabled = !busy && r.hasAudio && (r.status == RecordStatus.Failed || r.status == RecordStatus.Pending)) {
                 busy = true
                 status = "Re-streaming audio…"
-                scope.launch {
+                // In the app's scope: a retry takes as long as the recording, and leaving this screen must not cancel it
+                // (the session would be aborted, already billed, with nothing saved). Its toast reports the result.
+                graph.scope.launch {
                     val ok = graph.orchestrator.retry(r.id)
-                    status = if (ok) "Retry complete; text copied to the clipboard." else "Retry did not produce text."
-                    busy = false
-                    reload++
+                    withContext(Dispatchers.Main) {
+                        status = if (ok) "Retry complete; text copied to the clipboard." else "Retry did not produce text."
+                        busy = false
+                        reload++
+                    }
                 }
             }
             ActionButton(Icons.AutoMirrored.Rounded.Undo, "Undo AI edit", enabled = r.canUndoAiEdit) {

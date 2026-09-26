@@ -583,7 +583,7 @@ class DictationOrchestratorTest {
         dictate("Maybe.")
         assertEquals(RecordStatus.Inserted, history.records.single().status)
         assertEquals("also copied", hub.current.badge)
-        assertTrue(notifier.toasts.isEmpty())
+        assertEquals("Inserted and copied", notifier.toasts.single().first)
     }
 
     @Test
@@ -853,6 +853,10 @@ class DictationOrchestratorTest {
         lookupGate!!.complete(Unit)
         waitForIdleSession()
 
+        // Discarded, not failed: had the release won, the unconnected session would have timed out into "Failed".
+        assertEquals("Discarded", hub.current.badge)
+        assertTrue(notifier.toasts.none { it.first == "Dictation failed" || it.first == "Network error" })
+        assertTrue(sink.discarded)
         assertTrue(inserter.inserted.isEmpty())
         assertTrue(history.records.isEmpty())
         assertTrue(transcriber.aborted)

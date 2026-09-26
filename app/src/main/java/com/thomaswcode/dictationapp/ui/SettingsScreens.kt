@@ -335,11 +335,13 @@ fun AudioSettingsScreen(onBack: () -> Unit, requestMicrophone: () -> Unit) {
                 requestMicrophone()
             } else {
                 var peak = 0f
-                capture = MicrophoneCapture(context, s.microphoneDevice, graph.logger).also { c ->
+                var notice: String? = null
+                capture = MicrophoneCapture(context, s.microphoneDevice, graph.logger) { notice = it }.also { c ->
                     c.onFrame = { f ->
                         level = f.peak
                         peak = maxOf(peak, f.peak)
-                        testStatus = if (peak < 1e-4f) "Listening… no sound yet" else "Peak ${(peak * 100).roundToInt()}%"
+                        val heard = if (peak < 1e-4f) "Listening… no sound yet" else "Peak ${(peak * 100).roundToInt()}%"
+                        testStatus = listOfNotNull("$heard, recording from ${c.recordingFrom}.", notice).joinToString("\n")
                     }
                     c.onFault = { e -> testStatus = "Could not open the microphone: ${e.message}" }
                     c.start()
@@ -356,7 +358,7 @@ fun AudioSettingsScreen(onBack: () -> Unit, requestMicrophone: () -> Unit) {
     SubScreen("Audio", onBack) {
         SectionHeader("Microphone")
         Panel {
-            RadioRow<String?>(null, s.microphoneDevice, "Default", "The phone picks (usually the built-in microphone).") { v -> graph.settings.update { it.copy(microphoneDevice = v) } }
+            RadioRow<String?>(null, s.microphoneDevice, "Default", "The phone's own microphone. A connected headset is used only when you choose it below.") { v -> graph.settings.update { it.copy(microphoneDevice = v) } }
             devices.forEach { d ->
                 RadioRow<String?>(d.key, s.microphoneDevice, d.name) { v -> graph.settings.update { it.copy(microphoneDevice = v) } }
             }
@@ -380,7 +382,7 @@ fun AudioSettingsScreen(onBack: () -> Unit, requestMicrophone: () -> Unit) {
             }
         }
 
-        Hint("Audio is recorded at 16 kHz mono, exactly what AssemblyAI streams, so nothing is converted. A Bluetooth headset is switched to its call microphone while you dictate. If the meter stays flat, another app may be using the microphone.")
+        Hint("Audio is recorded at 16 kHz mono, exactly what AssemblyAI streams, so nothing is converted. A chosen Bluetooth headset is switched to its call microphone while you dictate; that takes a second or so, and the phone's microphone records until then. If the headset cannot be switched, the phone's microphone records and you are told once. If the meter stays flat, another app may be using the microphone.")
     }
 }
 

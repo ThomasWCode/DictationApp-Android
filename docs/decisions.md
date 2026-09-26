@@ -97,7 +97,7 @@ repositories. The user decided five questions it raised:
 | Crash recovery | Recordings are finished (WAV sizes written) only after their History record is saved; closing without `complete()` leaves sizes of zero. At the next start `InterruptedRecordings` repairs such files and lists them as Failed for Retry; shorter than 300 ms or past retention they are deleted. | A crash, a kill or a flat battery mid-dictation left audio no record referred to, which the orphan sweep deleted. |
 | Retry | Streams at real time, reading the WAV frame by frame; a retry without a Termination summary keeps the earlier words and stays retryable; cost uses the billed session time. | AssemblyAI processes streamed audio at about 1.25x real time at most, so the 4x replay came back cut off. |
 | Cleanup | A reply whose `finish_reason` is not `stop` is never used; only 401 ends the model chain (403 moves on); the record keeps every attempt's reason; a recurring settings problem is toasted once per run. Test keys tries every model of the chain. | As on Windows. |
-| Insertion | A field's whole text is replaced only when it is proven empty: Android's own marker (a TextView offering the rendering-info extra but not the character-location extra) or WhatsApp's chat-box id. A field that only looks like a stand-in (short text, no cursor, no cursor actions) keeps its text; the dictation goes at its end and is also copied, with an "also copied" badge. Text equal to the hint counts as the hint only without signs of real text. | The earlier rule (see the on-device findings) took missing accessibility metadata as proof of emptiness, so a Flutter or custom field holding a real draft lost it. |
+| Insertion | A field's whole text is replaced only when it is proven empty: Android's own marker (a TextView offering the rendering-info extra but not the character-location extra) or WhatsApp's chat-box id. A field that only looks like a stand-in (short text, no cursor, no cursor actions) keeps its text; the dictation goes at its end and is also copied, and a toast says so (the bubble cannot show text, so the "also copied" badge only complements the others: "cleanup skipped · also copied" still shows the amber ring). Text equal to the hint counts as the hint only without signs of real text. | The earlier rule (see the on-device findings) took missing accessibility metadata as proof of emptiness, so a Flutter or custom field holding a real draft lost it. |
 | Focus lost before insertion | The field the dictation started in is still used when no field has input focus (an app may drop focus when the keyboard closes), but it is never pasted into once it has lost focus: the text is copied instead. Setting its text directly still works. | Chromium reports a paste into a blurred web field as done although nothing arrives. The fallback stays because native fields take the direct path without focus. |
 | One delivery step | Live dictation and History's Insert share the orchestrator's delivery: the destination app's rule, the password and no-field checks, a clipboard copy after a failed insertion, the outcome toasts, and a lock so clipboard writers take turns. | History's Insert called the bridge directly and gave no outcome. |
 | Microphone | "Default" is the phone's own microphone whenever a headset or USB microphone is also connected (with the phone's alone, Android's choice is untouched). A chosen Bluetooth headset is brought up through its **output** with the same address (a communication device must be a sink); the phone's microphone records until the headset's call link is up and the recording switches over between frames; if the link is not up within 2.5 s the phone's microphone keeps recording and one toast per run says so. Android 11 uses the SCO switch, which needs `MODIFY_AUDIO_SETTINGS` (declared with `maxSdkVersion` 30). | The user's decision 4. Passing the microphone itself to `setCommunicationDevice` was refused, so a chosen Bluetooth microphone faulted or recorded silence. |
@@ -113,6 +113,30 @@ took the sentence after it by paste. With a JBL Live 770NC connected, "Default" 
 microphone with no Bluetooth route requested; with the JBL chosen, the phone's microphone recorded first and the
 call link was up 0.8 s later, Android listing the app's request as the headset's output (`bt_sco_hs`, role
 output); the request was withdrawn when the test stopped.
+
+Found testing Gmail and Outlook on the phone the same day: the bubble never appeared in Gmail's compose screen.
+Gmail marks it data-sensitive, and Android 14+ hides such views from accessibility services that are not declared
+accessibility tools: the service saw Gmail's compose window but no tree (`DUMP_WINDOWS`: root null, input focus
+null), while `uiautomator` saw every field. The service now declares `isAccessibilityTool` (dictation is an input
+tool; a personal build has no store policy to meet). Then the Subject took the dictation as its text (proven
+empty), the body (a web editor) took it by paste at the cursor with the signature card and its formatting intact,
+and a follow-on dictation joined after one space. Outlook needed no change: its Subject behaves like Gmail's, and
+its body (Microsoft's Rooster web editor) took dictations at the cursor above the signature, joined correctly.
+With a JBL Live 770NC chosen, a spoken dictation into WhatsApp recorded from the headset after the call link came
+up; with Default, spoken dictations into Gmail and Outlook recorded from the phone. A process killed mid-dictation
+was restarted by Android within 2 s with the service reconnected; the recording was recovered, toasted and listed,
+and Retry transcribed it at real time (9 s for 5.6 s of audio). History's Insert delivered into WhatsApp's search
+bar, and copied with a truthful toast when a fingerprint prompt (a locked chat) was in front.
+
+Pre-push review (same day), fixed before the first push:
+
+| Finding | Fix |
+|---|---|
+| The hourly orphan sweep deleted unfinished recordings: those a failed save left for listing at the next start, and those recovery never listed because a database error ended it (recovery was marked done before it ran). With a lost database and one interrupted recording, recovery made History non-empty before the empty check, so every other recording was swept. | The sweep skips unfinished recordings, recovery is marked done only after it succeeds, and History's emptiness is judged before recovery. (Windows had the same three; fixed there too.) |
+| "Also copied" was never shown (the bubble draws no badge text) and hid the amber ring when combined. | Badges are matched by content; an uncertain insertion toasts. |
+| Leaving History's detail screen cancelled a running Retry (now real time, so as long as the recording), aborting a billed session. | Retry runs in the app's scope. |
+| "Scratch that" right after "new line" deleted the sentence before it. | Only the line break is retracted (both apps). |
+| A test of the discard/release race passed without the fix. | It now checks the "Discarded" outcome. |
 
 Deliberate differences from Windows: Windows proves a paste by reading back the text before the caret; Android
 sets text directly and reads the whole field back, so its uncertain case is a field that only looks like a stand-in,

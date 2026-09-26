@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -52,11 +53,15 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -555,6 +560,21 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     val s by graph.settings.flow.collectAsStateWithLifecycle()
     var minutes by remember(s.maxDictationMinutes) { mutableStateOf(s.maxDictationMinutes.toString()) }
     var languages by remember(s.languageCodes) { mutableStateOf(s.languageCodes.orEmpty()) }
+
+    // Typed values are saved once typed (Done, leaving the field or the screen), not at every keystroke: a dictation
+    // started meanwhile would otherwise get "e" for "en, de", and each save is a write to disk.
+    val focus = LocalFocusManager.current
+    val typedMinutes by rememberUpdatedState(minutes)
+    val typedLanguages by rememberUpdatedState(languages)
+    val saveMinutes = { typedMinutes.toIntOrNull()?.let { m -> graph.settings.update { it.copy(maxDictationMinutes = m.coerceIn(1, 180)) } } }
+    val saveLanguages = { graph.settings.update { it.copy(languageCodes = typedLanguages.trim().ifEmpty { null }) } }
+    DisposableEffect(Unit) {
+        onDispose {
+            saveMinutes()
+            saveLanguages()
+        }
+    }
+
     SubScreen("General", onBack) {
         SectionHeader("Insertion")
         Panel {
@@ -568,14 +588,12 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = minutes,
-                    onValueChange = { v ->
-                        minutes = v.filter { it.isDigit() }.take(3)
-                        minutes.toIntOrNull()?.let { m -> graph.settings.update { it.copy(maxDictationMinutes = m.coerceIn(1, 180)) } }
-                    },
+                    onValueChange = { v -> minutes = v.filter { it.isDigit() }.take(3) },
                     label = { Text("Stop a dictation automatically after (minutes)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) saveMinutes() },
                 )
             }
         }
@@ -586,14 +604,13 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = languages,
-                    onValueChange = { v ->
-                        languages = v
-                        graph.settings.update { it.copy(languageCodes = v.trim().ifEmpty { null }) }
-                    },
+                    onValueChange = { v -> languages = v },
                     label = { Text("Language codes") },
                     placeholder = { Text("e.g. en, de") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) saveLanguages() },
                 )
             }
         }

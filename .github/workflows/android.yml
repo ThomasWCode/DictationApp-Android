@@ -27,7 +27,5 @@ jobs:
         with:
           name: test-reports
           path: app/build/reports/tests/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+      # No APK artifact: CI signs with its own debug key, and installing such an APK means uninstalling the app,
+      # which deletes its settings, keys and History (see the README). Build on the computer that installs it.

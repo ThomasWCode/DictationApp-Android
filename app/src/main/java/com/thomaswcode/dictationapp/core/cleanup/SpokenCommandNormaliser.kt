@@ -60,11 +60,17 @@ object SpokenCommandNormaliser {
         var s = input
         while (s.contains(SCRATCH_MARKER)) {
             val idx = s.indexOf(SCRATCH_MARKER)
-            var before = s.substring(0, idx).trimEnd()
+            var before = s.substring(0, idx).trimEnd(' ', '\t')
             val after = s.substring(idx + SCRATCH_MARKER.length)
-            if (before.isNotEmpty() && before.last() in ".?!") before = before.dropLast(1)
-            val cut = maxOf(maxOf(before.lastIndexOf('.'), before.lastIndexOf('?')), maxOf(before.lastIndexOf('!'), before.lastIndexOf('\n')))
-            before = if (cut >= 0) before.substring(0, cut + 1) else ""
+            if (before.endsWith('\n')) {
+                // Right after "new line" or "new paragraph" the line break is the last thing said: only it is retracted.
+                before = before.trimEnd('\n', ' ', '\t')
+            } else {
+                if (before.isNotEmpty() && before.last() in ".?!") before = before.dropLast(1)
+                val cut = maxOf(maxOf(before.lastIndexOf('.'), before.lastIndexOf('?')), maxOf(before.lastIndexOf('!'), before.lastIndexOf('\n')))
+                before = if (cut >= 0) before.substring(0, cut + 1) else ""
+            }
+
             s = before.trimEnd() + if (after.isNotEmpty()) " " + after.trimStart() else ""
         }
 

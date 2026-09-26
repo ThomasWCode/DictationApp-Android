@@ -34,6 +34,16 @@ class SpokenCommandNormaliserTest {
     }
 
     @Test
+    fun scratchThatAfterANewLineRetractsOnlyTheLineBreak() {
+        // The line break is the last thing said, so it is what "scratch that" takes back; the sentence before it stays.
+        assertEquals("Thanks", SpokenCommandNormaliser.normalise("Thanks new line scratch that"))
+        assertEquals("Dear Sam see you", SpokenCommandNormaliser.normalise("Dear Sam new paragraph scratch that see you"))
+
+        // The full stop said before "new paragraph" went with the line break, but the sentence itself stays.
+        assertEquals("Dear Sam See you.", SpokenCommandNormaliser.normalise("Dear Sam. New paragraph. Scratch that. See you."))
+    }
+
+    @Test
     fun scratchThatAfterAFullStopDropsTheSentenceItFollows() {
         // The transcriber often ends the retracted sentence with a full stop; that sentence is the one retracted.
         assertEquals("Send it to Alice.", SpokenCommandNormaliser.normalise("Send it to Bob. Scratch that. Send it to Alice."))

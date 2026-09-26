@@ -8,6 +8,8 @@ data class PostProcessRequest(
     val url: String?,
     val appHint: String?,
     val modelOverride: String? = null,
+    /** The transcript with pauses marked (TranscriptAssembler.pauseMarkedText), sent to the LLM instead when set. */
+    val pauseMarkedTranscript: String? = null,
 )
 
 data class PostProcessResult(

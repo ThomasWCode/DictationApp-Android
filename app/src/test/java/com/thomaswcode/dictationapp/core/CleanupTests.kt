@@ -105,6 +105,15 @@ class PromptBuilderTest {
     }
 
     @Test
+    fun promptExplainsPauseMarkersWhenTheTranscriptHasThem() {
+        val marked = PromptBuilder.buildSystemPrompt(ctx().copy(pauseMarkers = true))
+        assertTrue(marked.contains("\"[pause]\" marks where the speaker stopped"))
+        assertTrue(marked.contains("Never output [pause]"))
+        assertFalse(PromptBuilder.buildSystemPrompt(ctx()).contains("\"[pause]\" marks"))
+        assertFalse(PromptBuilder.buildSystemPrompt(ctx(CleanupLevel.None, Tone.Formal).copy(pauseMarkers = true)).contains("\"[pause]\" marks"))
+    }
+
+    @Test
     fun sessionsWaitForARealPauseBeforeEndingATurn() {
         // AssemblyAI's 100 ms default split sentences at every pause to think.
         val query = com.thomaswcode.dictationapp.core.session.DictationOrchestrator

@@ -33,6 +33,41 @@ class TranscriptAssemblerTest {
         TurnMessage(turnOrder = order, transcript = text, utterance = utterance ?: text, endOfTurn = end, turnIsFormatted = formatted)
 
     @Test
+    fun pauseMarkedTextLeavesEachPauseForTheLlmToDecide() {
+        val a = TranscriptAssembler()
+        a.ingest(turn(0, "Dictating into the chat box.", true, true))
+        a.ingest(turn(1, "Still adds a space.", true, true))
+        assertEquals("Dictating into the chat box. Still adds a space.", a.finalText)
+        assertEquals("Dictating into the chat box [pause] still adds a space.", a.pauseMarkedText)
+    }
+
+    @Test
+    fun joinAtPauses() {
+        fun j(vararg turns: String) = TranscriptAssembler.joinAtPauses(turns.toList())
+        assertEquals("Is it ready? [pause] yes.", j("Is it ready?", "Yes.")) // questions keep their mark
+        assertEquals("I think [pause] I know.", j("I think.", "I know.")) // "I" stays capital
+        assertEquals("Um [pause] WhatsApp is odd.", j("Um.", "WhatsApp is odd.")) // mixed-case names stay
+        assertEquals("The SDK [pause] NASA said so.", j("The SDK.", "NASA said so.")) // acronyms stay
+        assertEquals("Wait... [pause] no.", j("Wait...", "No.")) // an ellipsis is kept
+        assertEquals("One turn only.", j("One turn only."))
+        assertEquals("First [pause] second.", j("First.", "", "Second.")) // empty turns are skipped
+        assertEquals("Made in the [pause] U.S. mostly.", j("Made in the.", "U.S. mostly.")) // punctuated initialisms stay
+        assertEquals("We spent it on [pause] R&D, mostly.", j("We spent it on.", "R&D, mostly."))
+        assertEquals("Written in [pause] C# today.", j("Written in.", "C# today."))
+        assertEquals("Then [pause] still, it failed.", j("Then.", "Still, it failed.")) // trailing punctuation does not protect a word
+        assertEquals("\u7B2C\u4E00\u90E8\u5206 [pause] \u7B2C\u4E8C\u90E8\u5206\u3002", j("\u7B2C\u4E00\u90E8\u5206\u3002", "\u7B2C\u4E8C\u90E8\u5206\u3002")) // CJK full stop
+        assertEquals("\u4F60\u597D\uFF1F [pause] \u597D\u3002", j("\u4F60\u597D\uFF1F", "\u597D\u3002")) // CJK question mark stays
+    }
+
+    @Test
+    fun pauseMarkersLeftByTheModelAreRemoved() {
+        assertEquals("Hello there.", TranscriptAssembler.removePauseMarkers("Hello [pause] there."))
+        assertEquals("The end.", TranscriptAssembler.removePauseMarkers("The end [pause]."))
+        assertEquals("One.\nTwo.", TranscriptAssembler.removePauseMarkers("One.\n[pause] Two."))
+        assertEquals("No markers here.", TranscriptAssembler.removePauseMarkers("No markers here."))
+    }
+
+    @Test
     fun joinsFinalTurnsInTurnOrderRegardlessOfArrival() {
         val a = TranscriptAssembler()
         a.ingest(turn(2, "third.", true, true))

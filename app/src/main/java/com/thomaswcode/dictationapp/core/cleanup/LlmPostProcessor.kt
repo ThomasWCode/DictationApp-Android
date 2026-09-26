@@ -36,9 +36,11 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * OpenAI-compatible chat call (Groq by default) with a per-model fallback chain. Budget: 4 s per attempt,
- * 8 s total. Rate limits (429) and other failures move to the next model; a 401/403 stops the chain; any
- * total failure returns the normalised raw transcript so the user always gets their words. Reasoning
- * models (gpt-oss) are asked for low reasoning effort, otherwise they spend the whole budget thinking.
+ * 8 s total. Rate limits (429), a model the key may not use (403), unknown models and other failures move to the
+ * next model; only a rejected key (401) stops the chain. An answer the model did not finish (finish_reason other
+ * than "stop", for example "length" when it ran out of tokens) is never used: the next model is tried. Any total
+ * failure returns the normalised raw transcript so the user always gets their words. Reasoning models (gpt-oss) are
+ * asked for low reasoning effort, otherwise they spend the whole budget thinking.
  */
 class LlmPostProcessor(
     private val client: OkHttpClient,
@@ -88,7 +90,8 @@ class LlmPostProcessor(
         )
         val endpoint = baseUrl.resolve("chat/completions")!!
         val started = System.nanoTime()
-        var lastReason: String? = null
+        val attempts = mutableListOf<String>() // one reason per failed attempt: the trail kept when every model fails
+        var configurationProblem: String? = null
 
         try {
             return withTimeout(totalTimeoutMs) {
@@ -105,47 +108,58 @@ class LlmPostProcessor(
                         call.await().use { resp ->
                             val text = resp.body?.string().orEmpty()
                             if (!resp.isSuccessful) {
-                                lastReason = "$model:http-${resp.code}"
+                                attempts.add("$model:http-${resp.code}")
                                 logger.warn("LLM $model returned ${resp.code}: ${truncate(text, 300)}")
-                                if (resp.code == 401 || resp.code == 403) {
-                                    // Bad key: no point trying other models.
-                                    return@withTimeout PostProcessResult(fallback, false, null, lastReason)
+                                configurationProblem = configurationProblem ?: configurationProblemFor(model, resp.code, text)
+                                if (resp.code == 401) {
+                                    // The key itself is rejected: every other model would refuse it too.
+                                    return@withTimeout PostProcessResult(fallback, false, null, attempts.joinToString("; "), configurationProblem = configurationProblem)
                                 }
 
-                                return@use // 429 rate limit, 404 unknown model, 5xx: next model
+                                return@use // 403 model not allowed for this key, 429 rate limit, 404 unknown model, 5xx: next model
                             }
 
                             val parsed = parseChat(text)
+                            val finish = parsed.finishReason
+                            if (!finish.isNullOrEmpty() && !finish.equals("stop", ignoreCase = true)) {
+                                // Cut off (usually "length": the reasoning and the answer ran out of tokens) or filtered: the
+                                // text may be missing its end, which the length check cannot tell, so it is never inserted.
+                                attempts.add("$model:incomplete-$finish")
+                                logger.warn("LLM output from $model not finished ($finish, ${parsed.completionTokens} completion tokens, ${parsed.content?.length ?: 0} chars); trying the next model")
+                                return@use
+                            }
+
                             // Markers removed first, so the checks see exactly the text that would be inserted.
                             val validation = OutputValidator.validate(rawTranscript, parsed.content?.let { if (pauseMarkers) TranscriptAssembler.removePauseMarkers(it) else it })
                             if (!validation.isValid) {
-                                lastReason = "$model:invalid-${validation.reason}"
+                                attempts.add("$model:invalid-${validation.reason}")
                                 // Reason and size only: log files outlive the history retention, so no dictated text.
                                 logger.warn("LLM output from $model rejected (${validation.reason}, ${parsed.content?.length ?: 0} chars)")
                                 return@use
                             }
 
                             val elapsed = (System.nanoTime() - started) / 1_000_000
-                            logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, pauses=$pauseMarkers, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
-                            return@withTimeout PostProcessResult(validation.text, true, model, null, parsed.promptTokens, parsed.completionTokens)
+                            logger.info("LLM cleanup via $model in $elapsed ms (level=${request.level}, tone=${request.tone}, pauses=$pauseMarkers, finish=${finish ?: "none"}, tokens=${parsed.promptTokens}+${parsed.completionTokens})")
+                            return@withTimeout PostProcessResult(validation.text, true, model, null, parsed.promptTokens, parsed.completionTokens, configurationProblem)
                         }
                     } catch (e: IOException) {
-                        lastReason = if (e is java.io.InterruptedIOException) "$model:timeout" else "$model:${e.javaClass.simpleName}"
+                        attempts.add(if (e is java.io.InterruptedIOException) "$model:timeout" else "$model:${e.javaClass.simpleName}")
                         logger.warn("LLM $model failed: ${e.message}")
                     } catch (e: SerializationException) {
-                        lastReason = "$model:${e.javaClass.simpleName}"
+                        attempts.add("$model:${e.javaClass.simpleName}")
                         logger.warn("LLM $model returned unparseable JSON", e)
                     } catch (e: IllegalArgumentException) {
-                        lastReason = "$model:${e.javaClass.simpleName}"
+                        attempts.add("$model:${e.javaClass.simpleName}")
                         logger.warn("LLM $model returned an unexpected shape", e)
                     }
                 }
 
-                PostProcessResult(fallback, false, null, lastReason ?: "unknown")
+                PostProcessResult(fallback, false, null, attempts.joinToString("; ").ifEmpty { "unknown" }, configurationProblem = configurationProblem)
             }
         } catch (e: TimeoutCancellationException) {
             logger.warn("LLM chain hit the $totalTimeoutMs ms total budget")
-            return PostProcessResult(fallback, false, null, "total-timeout")
+            attempts.add("total-timeout")
+            return PostProcessResult(fallback, false, null, attempts.joinToString("; "), configurationProblem = configurationProblem)
         }
     }
 
@@ -166,17 +180,18 @@ class LlmPostProcessor(
         reasoningEffortFor(model)?.let { put("reasoning_effort", it) }
     }
 
-    private data class ChatResult(val content: String?, val promptTokens: Int?, val completionTokens: Int?)
+    private data class ChatResult(val content: String?, val promptTokens: Int?, val completionTokens: Int?, val finishReason: String?)
 
     private fun parseChat(text: String): ChatResult {
         val root = json.parseToJsonElement(text).jsonObject
-        val content = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
-            ?.get("message")?.jsonObject?.get("content")?.let { (it as? JsonPrimitive)?.contentOrNull }
+        val choice = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+        val content = choice?.get("message")?.jsonObject?.get("content")?.let { (it as? JsonPrimitive)?.contentOrNull }
         val usage = root["usage"] as? JsonObject
         return ChatResult(
             content,
             usage?.get("prompt_tokens")?.jsonPrimitive?.intOrNull,
             usage?.get("completion_tokens")?.jsonPrimitive?.intOrNull,
+            choice?.get("finish_reason")?.let { (it as? JsonPrimitive)?.contentOrNull },
         )
     }
 
@@ -194,6 +209,21 @@ class LlmPostProcessor(
 
         /** Groq's gpt-oss models accept reasoning_effort; "low" keeps latency and tokens down. */
         fun reasoningEffortFor(model: String): String? = if (model.contains("gpt-oss", ignoreCase = true)) "low" else null
+
+        /**
+         * A failure that will repeat on every dictation until the settings change: the key is rejected (401), the key
+         * may not use this model (403), or the model does not exist or was retired (404, or 400 naming the model). Worth
+         * telling the user once even when a fallback model covered for it. Null for passing trouble (429, timeouts, 5xx).
+         */
+        fun configurationProblemFor(model: String, code: Int, body: String?): String? = when {
+            code == 401 -> "The Groq key was rejected. Check it in Settings › API & models."
+            code == 403 -> "The Groq key may not use $model. Allow the model in the Groq console or pick another in Settings › API & models."
+            code == 404 -> "$model is not available (unknown or retired). Pick another model in Settings › API & models."
+            code == 400 && body != null && body.contains("model", ignoreCase = true) &&
+                (body.contains("decommission", ignoreCase = true) || body.contains("not_found", ignoreCase = true) || body.contains("does not exist", ignoreCase = true)) ->
+                "$model is not available (unknown or retired). Pick another model in Settings › API & models."
+            else -> null
+        }
 
         private fun truncate(s: String?, max: Int): String = when {
             s == null -> ""

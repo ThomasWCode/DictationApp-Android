@@ -74,6 +74,51 @@ class LlmPostProcessorTest {
         """{"choices":[{"message":{"role":"assistant","content":${kotlinx.serialization.json.JsonPrimitive(content)}}}],"usage":{"prompt_tokens":100,"completion_tokens":12}}""",
     )
 
+    private fun finished(content: String, finish: String) = MockResponse().setBody(
+        """{"choices":[{"message":{"role":"assistant","content":${kotlinx.serialization.json.JsonPrimitive(content)}},"finish_reason":"$finish"}],"usage":{"prompt_tokens":100,"completion_tokens":200}}""",
+    )
+
+    @Test
+    fun anAnswerCutOffAtTheTokenLimitIsNotUsedAndTheNextModelIsTried() = runBlocking {
+        // Half the text passes the length check, so only finish_reason shows it is incomplete.
+        server.enqueue(finished("So I think we should", "length"))
+        server.enqueue(finished("So I think we should ship on Tuesday.", "stop"))
+        val result = processor().process(raw, request)
+        assertTrue(result.applied)
+        assertEquals("b", result.model)
+        assertEquals("So I think we should ship on Tuesday.", result.text)
+    }
+
+    @Test
+    fun whenEveryModelIsCutOffTheRawTextIsUsedAndTheTrailKept() = runBlocking {
+        repeat(3) { server.enqueue(finished("So I think we", "length")) }
+        val result = processor().process(raw, request)
+        assertFalse(result.applied)
+        assertEquals("a:incomplete-length; b:incomplete-length; c:incomplete-length", result.failureReason)
+        assertNull(result.configurationProblem)
+    }
+
+    @Test
+    fun aModelTheKeyMayNotUseMovesToTheNextAndIsReported() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(403).setBody("{\"error\":{\"message\":\"model blocked\"}}"))
+        server.enqueue(ok("I think we should ship on Tuesday."))
+        val result = processor().process(raw, request)
+        assertTrue(result.applied)
+        assertEquals("b", result.model)
+        assertTrue(result.configurationProblem!!.contains("may not use a"))
+    }
+
+    @Test
+    fun aRetiredModelIsAConfigurationProblemButARateLimitIsNot() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("{\"error\":{\"code\":\"model_decommissioned\",\"message\":\"The model a has been decommissioned\"}}"))
+        server.enqueue(ok("I think we should ship on Tuesday."))
+        assertTrue(processor().process(raw, request).configurationProblem!!.contains("a is not available"))
+
+        server.enqueue(MockResponse().setResponseCode(429).setBody("{\"error\":{\"message\":\"Rate limit reached\"}}"))
+        server.enqueue(ok("I think we should ship on Tuesday."))
+        assertNull(processor().process(raw, request).configurationProblem)
+    }
+
     @Test
     fun callsWithBearerKeyAndReturnsCleanedText() = runBlocking {
         server.enqueue(ok("I think we should ship on Tuesday."))
@@ -347,20 +392,40 @@ class WavTest {
     }
 
     @Test
-    fun replayDeliversAllFramesThenCompletes() {
+    fun replayDeliversAllAudioInWholeFramesThenCompletes() {
+        // The last 100 bytes (3 ms) go out zero-padded to a whole frame: AssemblyAI takes chunks of 50 ms or more.
         val path = File(tmp.root, "r.wav").path
         WavFileSink(path).apply {
-            write(ByteArray(AudioFrame.FRAME_BYTES * 3 + 100))
+            write(ByteArray(AudioFrame.FRAME_BYTES * 3 + 100) { 1 })
             complete()
         }
         val capture = WavReplayAudioCapture(path, 20.0)
-        var bytes = 0
+        val frames = mutableListOf<ByteArray>()
         val done = CountDownLatch(1)
-        capture.onFrame = { bytes += it.pcm16.size }
+        capture.onFrame = { synchronized(frames) { frames.add(it.pcm16) } }
         capture.onCompleted = { done.countDown() }
         capture.start()
         assertTrue(done.await(5, TimeUnit.SECONDS))
-        assertEquals(AudioFrame.FRAME_BYTES * 3 + 100, bytes)
+        assertEquals(4, frames.size)
+        assertTrue(frames.all { it.size == AudioFrame.FRAME_BYTES })
+        assertEquals(AudioFrame.FRAME_BYTES * 3 + 100, frames.sumOf { f -> f.count { it == 1.toByte() } })
+    }
+
+    @Test
+    fun replayReadsAnUnfinishedRecordingToItsEnd() {
+        // A recording left by a crash still says its data is empty; the replay (Retry) reads what the file holds.
+        val path = File(tmp.root, "u.wav").path
+        val sink = WavFileSink(path)
+        sink.write(ByteArray(AudioFrame.FRAME_BYTES * 2) { 1 })
+        sink.close()
+        val capture = WavReplayAudioCapture(path, 20.0)
+        var bytes = 0
+        val done = CountDownLatch(1)
+        capture.onFrame = { f -> bytes += f.pcm16.count { it == 1.toByte() } }
+        capture.onCompleted = { done.countDown() }
+        capture.start()
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        assertEquals(AudioFrame.FRAME_BYTES * 2, bytes)
     }
 
     @Test

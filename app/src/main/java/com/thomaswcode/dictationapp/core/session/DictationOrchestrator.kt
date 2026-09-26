@@ -7,6 +7,7 @@ import com.thomaswcode.dictationapp.core.audio.AudioFrame
 import com.thomaswcode.dictationapp.core.audio.AudioSink
 import com.thomaswcode.dictationapp.core.audio.AudioSinkFactory
 import com.thomaswcode.dictationapp.core.audio.MicrophoneAccessDeniedException
+import com.thomaswcode.dictationapp.core.audio.MicrophoneUnavailableException
 import com.thomaswcode.dictationapp.core.cleanup.CleanupLevel
 import com.thomaswcode.dictationapp.core.cleanup.PostProcessRequest
 import com.thomaswcode.dictationapp.core.cleanup.PostProcessorRouter
@@ -91,6 +92,10 @@ class DictationOrchestrator(
     private val events = Channel<ControlEvent>(Channel.UNLIMITED)
     private val ownerLock = Any()
     private val replayGate = Mutex()
+
+    // Clipboard writers take turns (an insertion, History's Insert, a Retry's copy), so a paste can never pick up
+    // another writer's text.
+    private val clipboardGate = Mutex()
     private lateinit var scope: CoroutineScope
 
     @Volatile private var session: DictationSession? = null
@@ -98,6 +103,9 @@ class DictationOrchestrator(
     @Volatile private var sessionJob: Job? = null
 
     private var badgeSeq = 0
+
+    /** Cleanup settings problems already shown this run (one toast each). */
+    private val reportedCleanupProblems = HashSet<String>()
 
     init {
         machine.onPressIgnored = { hub.flash() }
@@ -151,8 +159,18 @@ class DictationOrchestrator(
     /** The press was a quick tap: keep dictating with nothing held until [release] or [cancel]. */
     fun enterHandsFree() = events.trySend(ControlEvent.HandsFree)
 
-    /** Discard the dictation. [silent] skips the "Discarded" badge (used when a press turns into a drag). */
+    /**
+     * Discard the dictation. Only possible while it records: once released (✓ or letting go) it always finishes into the
+     * field or onto the clipboard. [silent] skips the "Discarded" badge (used when a press turns into a drag).
+     */
     fun cancel(silent: Boolean = false) = events.trySend(ControlEvent.Cancel(silent))
+
+    /**
+     * The accessibility service is going away (switched off, or stopped by the system). A dictation still recording is
+     * stopped and kept in History as Failed with its audio, for Retry; one already released finishes as usual (onto
+     * the clipboard, as there is no field to type into any more). Not a discard: that is only the user's choice.
+     */
+    fun interrupt() = events.trySend(ControlEvent.Interrupt)
 
     /**
      * Runs a full dictation (context capture, streaming, cleanup, insertion) with a WAV file standing in for
@@ -187,6 +205,7 @@ class DictationOrchestrator(
                 hub.update { it.copy(handsFree = true) }
             }
             is ControlEvent.Cancel -> session?.cancel(ev.silent)
+            ControlEvent.Interrupt -> session?.interrupt()
         }
     }
 
@@ -198,19 +217,8 @@ class DictationOrchestrator(
         val jobs = CoroutineScope(currentCoroutineContext() + SupervisorJob(currentCoroutineContext()[Job]))
         val record = DictationRecord(createdAt = s.startedAt, updatedAt = s.startedAt, status = RecordStatus.Pending)
         try {
-            // 1. Capture where the user is before anything else moves.
-            s.context = safeCapture()
-            s.rule = AppRulesResolver.resolve(s.context, settings.appRules, settings.defaultTone, settings.defaultCleanupLevel, settings.insertMethod)
-            s.tone = s.rule.tone
-            s.level = s.rule.level
-            record.packageName = s.context.packageName.ifEmpty { null }
-            record.appLabel = s.context.appLabel.ifEmpty { null }
-            record.windowTitle = s.context.windowTitle.ifEmpty { null }
-            record.url = s.context.url
-            logger.info("Dictation started in ${s.context.packageName} (${s.context.windowTitle}) rule=${s.rule.matchedBy} editable=${s.context.isEditable}/${s.context.editableReason}")
-            publishSession(s, DictationState.Arming, "Listening")
-
-            // 2. Microphone + WAV sink. Frames buffer in the channel until the socket is ready.
+            // 1. Microphone first: anything said before it starts is lost. Frames buffer in the channel until the
+            // socket is ready; the field lookup below comes after, so it cannot delay the recording.
             if (s.simulatedWavPath == null && !hasMicrophonePermission()) {
                 throw MicrophoneAccessDeniedException("Microphone permission has not been granted.")
             }
@@ -230,8 +238,10 @@ class DictationOrchestrator(
             }
             capture.onFault = { s.fault(it) }
             capture.start()
+            s.mark("mic")
+            publishSession(s, DictationState.Arming, "Listening")
 
-            // 3. Socket.
+            // 2. Socket: its TLS and session setup overlaps the field lookup below.
             val t = transcribers.create()
             transcriber = t
             s.transcriber = t
@@ -251,19 +261,40 @@ class DictationOrchestrator(
             }
             jobs.launch { watchForSilentMicrophone(s) }
 
+            // 3. Where the user is: the focused field, its app and website, and the app rule (tone and level).
+            s.context = safeCapture()
+            s.mark("lookup")
+            s.rule = AppRulesResolver.resolve(s.context, settings.appRules, settings.defaultTone, settings.defaultCleanupLevel, settings.insertMethod)
+            s.tone = s.rule.tone
+            s.level = s.rule.level
+            record.packageName = s.context.packageName.ifEmpty { null }
+            record.appLabel = s.context.appLabel.ifEmpty { null }
+            record.windowTitle = s.context.windowTitle.ifEmpty { null }
+            record.url = s.context.url
+            logger.info("Dictation started in ${s.context.packageName} (${s.context.windowTitle}) rule=${s.rule.matchedBy} editable=${s.context.isEditable}/${s.context.editableReason} url=${s.context.urlSource}")
+            publishSession(s, DictationState.Arming, "Listening")
+
             val first = select<Outcome> {
                 connect.onJoin { Outcome.Connected }
                 s.released.onJoin { Outcome.Released }
                 s.cancelled.onJoin { Outcome.Cancelled }
                 s.faulted.onJoin { Outcome.Faulted }
+                s.interrupted.onJoin { Outcome.Interrupted }
             }
 
+            // A discard wins over a release that arrived with it.
+            if (s.cancelled.isCompleted) return discard(s, capture, sink, t, if (s.cancelled.await()) null else "Discarded")
             when (first) {
-                Outcome.Cancelled -> return discard(s, capture, sink, t, if (s.cancelled.await()) null else "Discarded")
+                Outcome.Interrupted -> return saveInterrupted(s, record, capture, sink, t)
                 Outcome.Faulted -> return fail(s, record, capture, sink, t, s.faulted.await())
                 Outcome.Released -> {
-                    // Released before Begin: give the connection its remaining budget, then flush the buffer.
+                    // Released before Begin. The release ends the recording: stop the microphone now, then give the
+                    // connection its remaining budget and send what was recorded. Nothing said after the release is
+                    // recorded or uploaded.
+                    s.mark("release")
                     machine.fire(DictationTrigger.Release)
+                    capture.stop()
+                    s.frames.close()
                     publishSession(s, DictationState.Finalising, "Connecting")
                     try {
                         connect.await()
@@ -272,8 +303,7 @@ class DictationOrchestrator(
                         return fail(s, record, capture, sink, t, e)
                     }
 
-                    capture.stop()
-                    s.frames.close()
+                    s.mark("begin")
                     sendFrames(s, t)
                 }
                 else -> {
@@ -286,6 +316,7 @@ class DictationOrchestrator(
                     }
 
                     machine.fire(DictationTrigger.BeginReceived)
+                    s.mark("begin")
                     logger.info("Connect latency ${t.connectLatencyMs ?: -1} ms")
                     publishSession(s, DictationState.Recording, null)
                     val sender = jobs.launch { sendFrames(s, t) }
@@ -298,11 +329,14 @@ class DictationOrchestrator(
                         s.released.onJoin { Outcome.Released }
                         s.cancelled.onJoin { Outcome.Cancelled }
                         s.faulted.onJoin { Outcome.Faulted }
+                        s.interrupted.onJoin { Outcome.Interrupted }
                         cap.onJoin { Outcome.Cap }
                     }
                     capJob.cancel()
+                    s.mark("release")
+                    if (s.cancelled.isCompleted) return discard(s, capture, sink, t, if (s.cancelled.await()) null else "Discarded")
                     when (end) {
-                        Outcome.Cancelled -> return discard(s, capture, sink, t, if (s.cancelled.await()) null else "Discarded")
+                        Outcome.Interrupted -> return saveInterrupted(s, record, capture, sink, t)
                         Outcome.Faulted -> {
                             machine.fire(DictationTrigger.SocketFault)
                             return fail(s, record, capture, sink, t, s.faulted.await())
@@ -314,6 +348,9 @@ class DictationOrchestrator(
                         else -> machine.fire(DictationTrigger.Release)
                     }
 
+                    // The pill and its ✕ go at once: from here the dictation finishes (a discard is only possible while
+                    // recording), so the bubble shows it working while the audio tail drains.
+                    publishSession(s, DictationState.Finalising, "Finishing")
                     capture.stop()
                     s.frames.close()
                     if (withTimeoutOrNull(TAIL_DRAIN_MS) { sender.join() } == null) {
@@ -326,23 +363,26 @@ class DictationOrchestrator(
             // 4. Finalising: graceful handshake bounded by the hard cap.
             publishSession(s, DictationState.Finalising, "Finishing")
             val termination = t.shutdown(HANDSHAKE_CAP_MS)
+            s.mark("handshake")
             // A socket fault after the release is no longer being selected on; without a Termination summary the
             // transcript may be missing its tail, so save it as Failed (audio kept for Retry) rather than insert it.
             if (termination == null && s.faulted.isCompleted) return fail(s, record, capture, sink, t, s.faulted.await())
+            if (termination == null) logger.warn("No Termination summary from the streaming session; the transcript may be missing its last words")
             val audioSeconds = termination?.audioDurationSeconds ?: (s.audioDurationMs / 1000.0)
             record.durationMs = s.audioDurationMs.toInt()
-            record.costEstimate = CostEstimator.sttCost(settings.speechModel, audioSeconds)
+            record.costEstimate = CostEstimator.sttCost(settings.speechModel, billedSeconds(termination, audioSeconds))
             val rawText = s.assembler.finalText
             record.rawTranscript = rawText
-            sink?.let {
-                it.complete()
-                record.audioPath = it.path
-            }
+
+            // The recording is finished (complete) only once its record is saved: until then its header keeps the
+            // "unfinished" marker, so a crash or kill during cleanup or insertion leaves a file the next start
+            // recovers into History instead of an orphan the sweep deletes.
+            record.audioPath = sink?.path
 
             if (rawText.isBlank()) {
                 sink?.discard()
                 record.audioPath = null
-                logger.info("Nothing heard")
+                logger.info("Nothing heard (ms since the press: ${s.timings()})")
                 finish(s, DictationTrigger.NothingHeard, "Nothing heard")
                 return
             }
@@ -356,6 +396,8 @@ class DictationOrchestrator(
             val keyterms = KeytermsSelector.select(settings.dictionary)
             val request = PostProcessRequest(s.level, s.tone, keyterms, s.context.appName, s.context.url, s.rule.hint, pauseMarkedTranscript = s.assembler.pauseMarkedText)
             val result = postProcessor.process(rawText, request)
+            s.mark("cleanup")
+            reportCleanupProblem(result.configurationProblem, result.applied)
             record.cleanedText = if (result.applied) result.text else ""
             record.llmModel = result.model
             record.failureReason = if (result.applied) null else result.failureReason
@@ -397,7 +439,7 @@ class DictationOrchestrator(
                 }
                 InsertionOutcome.Failed -> {
                     record.status = RecordStatus.Failed
-                    record.failureReason = insertion.reason
+                    record.failureReason = appendReason(record.failureReason, insertion.reason)
                     clipboard.setText(record.insertedText)
                     notifier.toast("Could not insert", (insertion.reason ?: "Unknown error") + ". Text copied to the clipboard.", ToastKind.Warning)
                     DictationTrigger.Failed
@@ -405,15 +447,16 @@ class DictationOrchestrator(
             }
 
             record.updatedAt = clock()
-            saveRecord(record)
+            if (saveRecord(record)) sink?.complete()
             bumpDictionaryUsage(keyterms, rawText)
-            logger.info("Dictation ${record.status}: ${countWords(record.insertedText)} words, ${"%.1f".format(audioSeconds)}s audio, llm=${result.model ?: "none"}")
+            logger.info("Dictation ${record.status}: ${countWords(record.insertedText)} words, ${"%.1f".format(audioSeconds)}s audio, llm=${result.model ?: "none"} (ms since the press: ${s.timings()})")
             finish(s, trigger, badge)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Errors too (an ExceptionInInitializerError once escaped this and lost the dictation): keep what was heard.
             logger.error("Dictation session crashed in state ${machine.state}", e)
-            withContext(NonCancellable) { fail(s, record, capture, sink, transcriber, e) }
+            withContext(NonCancellable) { runCatching { fail(s, record, capture, sink, transcriber, e) } }
         } finally {
             jobs.cancel()
             runCatching { capture?.close() }
@@ -440,14 +483,34 @@ class DictationOrchestrator(
         finish(s, DictationTrigger.Cancel, badge)
     }
 
+    /**
+     * The accessibility service went away while the dictation was still recording: keep what was recorded as a Failed
+     * record with its audio and the words heard, for Retry. No network call, no insertion.
+     */
+    private suspend fun saveInterrupted(s: DictationSession, record: DictationRecord, capture: AudioCapture?, sink: AudioSink?, transcriber: StreamingTranscriber?) {
+        logger.warn("Accessibility service stopped during a dictation; keeping it for Retry")
+        capture?.stop()
+        s.frames.close()
+        transcriber?.abort()
+        if (sink != null && sink.bytesWritten > 0) record.audioPath = sink.path else sink?.discard()
+        record.status = RecordStatus.Failed
+        record.failureReason = INTERRUPTED_REASON
+        record.rawTranscript = s.assembler.finalText
+        record.tone = s.tone
+        record.level = s.level
+        record.durationMs = s.audioDurationMs.toInt()
+        record.updatedAt = clock()
+        if ((record.audioPath != null || record.rawTranscript.isNotBlank()) && saveRecord(record) && record.audioPath != null) sink?.complete()
+        finish(s, DictationTrigger.Failed, null)
+    }
+
     private suspend fun fail(s: DictationSession, record: DictationRecord, capture: AudioCapture?, sink: AudioSink?, transcriber: StreamingTranscriber?, error: Throwable) {
         logger.warn("Dictation failed: ${error.message}", error)
         capture?.stop()
         s.frames.close()
         transcriber?.abort()
         if (sink != null && sink.bytesWritten > 0) {
-            sink.complete()
-            record.audioPath = sink.path
+            record.audioPath = sink.path // finished below once the record is saved
         } else {
             sink?.discard()
         }
@@ -459,6 +522,11 @@ class DictationOrchestrator(
         record.tone = s.tone
         record.level = s.level
         record.durationMs = s.audioDurationMs.toInt()
+        if (transcriber?.connectLatencyMs != null && record.costEstimate == null) {
+            // The streaming session was open and billed; no summary, so the audio sent is the best estimate.
+            record.costEstimate = CostEstimator.sttCost(settings.current.speechModel, s.audioDurationMs / 1000.0)
+        }
+
         record.updatedAt = clock()
         val isNetwork = error is IOException || error is TimeoutException || error.cause is IOException
         when {
@@ -466,19 +534,25 @@ class DictationOrchestrator(
                 notifier.toast("Microphone blocked", "Allow microphone access for DictationApp.", ToastKind.Error)
                 notifier.requestMicrophonePermission()
             }
+            error is MicrophoneUnavailableException -> notifier.toast("Microphone unavailable", message, ToastKind.Warning)
             record.audioPath != null -> {
-                saveRecord(record)
-                if (isNetwork) {
-                    notifier.toast("Network error", "Saved to history. Use Retry when you are back online.", ToastKind.Warning)
+                if (saveRecord(record)) {
+                    sink?.complete()
+                    if (isNetwork) {
+                        notifier.toast("Network error", "Saved to history. Use Retry when you are back online.", ToastKind.Warning)
+                    } else {
+                        notifier.toast("Dictation failed", "$message The recording is saved in History.", ToastKind.Warning)
+                    }
                 } else {
-                    notifier.toast("Dictation failed", "$message The recording is saved in History.", ToastKind.Warning)
+                    // Left unfinished on purpose: the next start recovers it into History for Retry.
+                    notifier.toast("Dictation failed", "$message History could not be written; the recording is kept and will be listed after a restart.", ToastKind.Warning)
                 }
             }
             // No audio ("Store audio" off, or nothing recorded) but some words were heard: keep them in History,
             // where they can still be copied. Retry needs audio, so it stays unavailable for this record.
             record.rawTranscript.isNotBlank() -> {
-                saveRecord(record)
-                notifier.toast("Dictation failed", "$message What was heard so far is saved in History.", ToastKind.Warning)
+                val saved = saveRecord(record)
+                notifier.toast("Dictation failed", message + if (saved) " What was heard so far is saved in History." else " History could not be written.", ToastKind.Warning)
             }
             else -> notifier.toast("Dictation failed", message, ToastKind.Error)
         }
@@ -486,13 +560,23 @@ class DictationOrchestrator(
         finish(s, DictationTrigger.Failed, "Failed")
     }
 
-    private suspend fun saveRecord(record: DictationRecord) {
-        try {
-            if (record.id == 0L) record.id = history.insert(record) else history.update(record)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            logger.error("Could not write history record", e)
-        }
+    /** False when History could not be written (logged); callers then say so instead of "saved". */
+    private suspend fun saveRecord(record: DictationRecord): Boolean = try {
+        if (record.id == 0L) record.id = history.insert(record) else history.update(record)
+        true
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        logger.error("Could not write history record", e)
+        false
+    }
+
+    /**
+     * A cleanup settings problem that will recur (rejected key, a model the key may not use, a retired model) is shown
+     * once per run, even when a fallback model covered for it.
+     */
+    private fun reportCleanupProblem(problem: String?, applied: Boolean) {
+        if (problem == null || !synchronized(reportedCleanupProblems) { reportedCleanupProblems.add(problem) }) return
+        notifier.toast(if (applied) "Cleanup model problem" else "Cleanup skipped", problem, ToastKind.Warning)
     }
 
     private fun bumpDictionaryUsage(keyterms: List<String>, text: String) {
@@ -555,8 +639,10 @@ class DictationOrchestrator(
     }
 
     /**
-     * Re-streams a stored WAV through the transcriber (4x real time), cleans it up and copies the result to
-     * the clipboard. Used by Retry in History for failed and pending records.
+     * Re-streams a stored WAV through the transcriber (at [RETRY_REPLAY_SPEED]), cleans it up and copies the result to
+     * the clipboard. Used by Retry in History for failed and pending records. A retry whose streaming session ended
+     * without its Termination summary may be missing its end, so it counts as failed: the record keeps its earlier
+     * words and stays retryable.
      */
     suspend fun retry(recordId: Long): Boolean {
         val record = history.get(recordId)
@@ -573,7 +659,17 @@ class DictationOrchestrator(
 
         return try {
             val settings = settings.current
-            val transcript = transcribeWav(audio, 4.0, null)
+            val transcript = transcribeWav(audio, RETRY_REPLAY_SPEED, null)
+            record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.sttCost(settings.speechModel, billedSeconds(transcript.termination, transcript.wallClockMs / 1000.0))
+            record.updatedAt = clock()
+            if (transcript.termination == null) {
+                logger.warn("Retry of record $recordId ended without a Termination summary; keeping the earlier transcript")
+                record.failureReason = "retry: the transcription did not finish"
+                history.update(record)
+                notifier.toast("Retry failed", "The transcription did not finish. The recording is kept; try Retry again.", ToastKind.Warning)
+                return false
+            }
+
             if (transcript.text.isBlank()) {
                 record.failureReason = "retry: nothing heard"
                 history.update(record)
@@ -583,7 +679,8 @@ class DictationOrchestrator(
 
             val request = PostProcessRequest(record.level, record.tone, KeytermsSelector.select(settings.dictionary), record.appName, record.url, null, pauseMarkedTranscript = transcript.pauseMarkedText)
             val result = postProcessor.process(transcript.text, request)
-            clipboard.setText(result.text)
+            reportCleanupProblem(result.configurationProblem, result.applied)
+            clipboardGate.withLock { clipboard.setText(result.text) }
             record.rawTranscript = transcript.text
             record.cleanedText = if (result.applied) result.text else ""
             record.insertedText = result.text
@@ -591,8 +688,7 @@ class DictationOrchestrator(
             record.status = RecordStatus.CopiedOnly
             record.failureReason = if (result.applied) null else result.failureReason
             record.updatedAt = clock()
-            record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.sttCost(settings.speechModel, transcript.audioDurationMs / 1000.0) +
-                CostEstimator.llmCost(result.model, result.promptTokens, result.completionTokens)
+            record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.llmCost(result.model, result.promptTokens, result.completionTokens)
             history.update(record)
             notifier.toast("Retry complete", "Text copied to the clipboard.", ToastKind.Success)
             true
@@ -650,7 +746,7 @@ class DictationOrchestrator(
         }
     }
 
-    private enum class Outcome { Connected, Released, Cancelled, Faulted, Cap }
+    private enum class Outcome { Connected, Released, Cancelled, Faulted, Interrupted, Cap }
 
     private sealed interface ControlEvent {
         data class Press(val wavPath: String?) : ControlEvent
@@ -660,6 +756,8 @@ class DictationOrchestrator(
         data object HandsFree : ControlEvent
 
         data class Cancel(val silent: Boolean) : ControlEvent
+
+        data object Interrupt : ControlEvent
     }
 
     /** Mutable per-dictation state shared between the control loop and the session job. */
@@ -669,6 +767,11 @@ class DictationOrchestrator(
         /** Completes with true for a silent cancel (no badge). */
         val cancelled = CompletableDeferred<Boolean>()
         val faulted = CompletableDeferred<Throwable>()
+
+        /** The accessibility service went away (see [DictationOrchestrator.interrupt]). */
+        val interrupted = CompletableDeferred<Unit>()
+        private val started = System.nanoTime()
+        private val marks = mutableListOf<Pair<String, Long>>()
         val frames = Channel<AudioFrame>(Channel.UNLIMITED)
         val assembler = TranscriptAssembler()
         private val bytes = AtomicLong()
@@ -698,6 +801,16 @@ class DictationOrchestrator(
         fun cancel(silent: Boolean) = cancelled.complete(silent)
 
         fun fault(e: Throwable) = faulted.complete(e)
+
+        fun interrupt() = interrupted.complete(Unit)
+
+        /** Notes when a phase was reached, for the one timing line logged per dictation (no text). */
+        fun mark(phase: String) = synchronized(marks) {
+            if (marks.none { it.first == phase }) marks.add(phase to (System.nanoTime() - started) / 1_000_000)
+        }
+
+        /** For example "mic 21, lookup 180, begin 902, release 3410, handshake 4120, cleanup 4800, insert 5130". */
+        fun timings(): String = synchronized(marks) { marks.joinToString(", ") { "${it.first} ${it.second}" } }
 
         fun onFrame(frame: AudioFrame) {
             bytes.addAndGet(frame.pcm16.size.toLong())
@@ -732,6 +845,31 @@ class DictationOrchestrator(
 
         const val CONNECT_TIMEOUT_MS = 3_000L
         const val HANDSHAKE_CAP_MS = 2_500L
+
+        /**
+         * Replay pace for Retry: real time. AssemblyAI processes streamed audio at about 1.25x real time at most and then
+         * ends the session with a short handshake, so the old 4x replay left the end of any recording longer than a few
+         * seconds unprocessed and the retry came back silently cut off. A retry therefore takes about as long as the
+         * recording.
+         */
+        const val RETRY_REPLAY_SPEED = 1.0
+
+        /** Failure reason of a dictation still recording when the accessibility service went away. */
+        const val INTERRUPTED_REASON = "Interrupted: the accessibility service stopped during the dictation"
+
+        /**
+         * What AssemblyAI bills: the time the streaming session was open, from its Termination summary; otherwise the
+         * measured fallback. The audio length alone misses the connection and handshake time.
+         */
+        fun billedSeconds(termination: TerminationMessage?, fallbackSeconds: Double): Double =
+            termination?.sessionDurationSeconds?.takeIf { it > 0 } ?: fallbackSeconds
+
+        /** A failure reason added after another (cleanup, then insertion) is appended, never overwrites it. */
+        fun appendReason(existing: String?, added: String?): String? = when {
+            existing.isNullOrEmpty() -> added
+            added.isNullOrEmpty() -> existing
+            else -> "$existing; $added"
+        }
         const val SILENT_MIC_WARNING_MS = 2_000L
         const val TAIL_DRAIN_MS = 1_500L
 

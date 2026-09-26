@@ -19,6 +19,11 @@ data class PostProcessResult(
     val failureReason: String?,
     val promptTokens: Int? = null,
     val completionTokens: Int? = null,
+    /**
+     * A settings problem that will recur on every dictation (rejected key, a model the key may not use, an unknown or
+     * retired model), set even when a fallback model covered for it, so the user can be told once.
+     */
+    val configurationProblem: String? = null,
 ) {
     companion object {
         fun passthrough(text: String) = PostProcessResult(text, false, null, null)

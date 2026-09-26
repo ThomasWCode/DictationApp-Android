@@ -27,6 +27,8 @@ data class ForegroundContext(
     val isPassword: Boolean,
     val editableReason: String,
     val target: Any? = null,
+    /** Where [url] came from, for the log (never the URL itself): "live" address bar, "remembered", or "none". */
+    val urlSource: String = if (url == null) "none" else "live",
 ) {
     /** Host part of [url] in lower case, or null. */
     val urlHost: String?

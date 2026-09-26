@@ -14,6 +14,7 @@ import com.thomaswcode.dictationapp.core.audio.AudioCapture
 import com.thomaswcode.dictationapp.core.audio.AudioCaptureFactory
 import com.thomaswcode.dictationapp.core.audio.AudioFrame
 import com.thomaswcode.dictationapp.core.audio.MicrophoneAccessDeniedException
+import com.thomaswcode.dictationapp.core.audio.MicrophoneUnavailableException
 import com.thomaswcode.dictationapp.core.audio.WavReplayAudioCapture
 import java.io.IOException
 import kotlin.concurrent.thread
@@ -84,14 +85,15 @@ class MicrophoneCapture(
             return
         } catch (e: IllegalArgumentException) {
             running = false
-            onFault?.invoke(IOException("The microphone could not be opened: ${e.message}"))
+            onFault?.invoke(MicrophoneUnavailableException("The microphone could not be opened: ${e.message}"))
             return
         }
 
         synchronized(recordLock) { activeRecord = record }
         try {
             if (record.state != AudioRecord.STATE_INITIALIZED) {
-                throw MicrophoneAccessDeniedException("The microphone could not be opened (is another app using it, or is access blocked?).")
+                // Access is granted (checked before a capture is created), so this is a busy or missing device.
+                throw MicrophoneUnavailableException("The microphone could not be opened; another app may be using it.")
             }
 
             InputDevices.find(context, deviceKey)?.let { device ->
@@ -115,7 +117,7 @@ class MicrophoneCapture(
 
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                throw MicrophoneAccessDeniedException("The microphone did not start (another app may be using it).")
+                throw MicrophoneUnavailableException("The microphone did not start; another app may be using it.")
             }
 
             val buffer = ByteArray(AudioFrame.FRAME_BYTES)
@@ -133,8 +135,11 @@ class MicrophoneCapture(
                 }
 
                 if (read > 0) {
-                    val pcm = buffer.copyOf(read)
-                    onFrame?.invoke(AudioFrame(pcm, AudioFrame.peakOf(pcm), position))
+                    // A short last read (the stop came mid-frame) is zero-padded to a whole frame: AssemblyAI takes
+                    // chunks of 50 ms or more, and the speech in it is kept.
+                    val pcm = buffer.copyOf()
+                    if (read < pcm.size) pcm.fill(0, read, pcm.size)
+                    onFrame?.invoke(AudioFrame(pcm, AudioFrame.peakOf(pcm, read), position))
                     position += read * 1000L / (AudioFrame.SAMPLE_RATE * 2)
                 }
             }

@@ -31,6 +31,8 @@ enum class DictationTrigger {
 /**
  * The dictation lifecycle as an explicit table. Unlisted (state, trigger) pairs are ignored, so an
  * unexpected event can never throw; a press while busy is reported through [onPressIgnored].
+ * Cancel (a discard) is only possible while recording (Arming, Recording); once released the dictation always
+ * finishes, into the field or onto the clipboard, and is kept in History.
  *
  * Android difference from Windows: a quick tap on the bubble starts a hands-free dictation instead of
  * cancelling, so Release in Arming always finalises (the bubble only sends it after a real hold or a tap
@@ -76,14 +78,15 @@ class DictationStateMachine(
                 DictationTrigger.Cancel, DictationTrigger.SocketFault, DictationTrigger.Failed -> DictationState.Idle
                 else -> null
             }
+            // Released: the dictation finishes (a discard is only possible while recording).
             DictationState.Finalising -> when (trigger) {
                 DictationTrigger.HandshakeComplete -> DictationState.PostProcessing
-                DictationTrigger.NothingHeard, DictationTrigger.Cancel, DictationTrigger.Failed -> DictationState.Idle
+                DictationTrigger.NothingHeard, DictationTrigger.Failed -> DictationState.Idle
                 else -> null
             }
             DictationState.PostProcessing -> when (trigger) {
                 DictationTrigger.PostProcessed -> DictationState.Inserting
-                DictationTrigger.Cancel, DictationTrigger.Failed -> DictationState.Idle
+                DictationTrigger.Failed -> DictationState.Idle
                 else -> null
             }
             DictationState.Inserting -> when (trigger) {

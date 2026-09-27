@@ -185,6 +185,27 @@ class SqliteHistoryRepositoryTest {
     }
 
     @Test
+    fun recordingsFoundWhileHistoryWasEmptyAreKeptOnceItHasRecords(): Unit = runBlocking {
+        // A lost or recreated database: its recordings must survive the first new dictation, not only the first pass.
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "rebuilt")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        var now = 20L * 86_400_000
+        val lost = wav(File(paths.audioDir, "lost.wav"), now - 5 * 86_400_000L, finished = true)
+        val retention = HistoryRetention(repo, FixedSettings(AppSettings()), paths, NoLogger, clock = { now }, runStartedAt = now - 60_000)
+        retention.run()
+
+        now += 3_600_000
+        repo.insert(record("new", createdAt = now, audio = wav(File(paths.audioDir, "new.wav"), now, finished = true).path))
+        val orphan = wav(File(paths.audioDir, "orphan.wav"), now, finished = true) // a failed save once the database was back
+        now += 2 * 86_400_000L
+        retention.run()
+
+        assertTrue(lost.exists())
+        assertFalse(orphan.exists())
+    }
+
+    @Test
     fun retentionPassDeletesFilesAndOrphans(): Unit = runBlocking {
         val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "ret")
         val paths = AppPaths(dir)

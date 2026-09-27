@@ -160,6 +160,13 @@ Found while fixing those: a Retry whose connection timed out ended without a wor
 was taken for its caller's. It now fails like any other error, with "Retry failed" and the reason on the record (both
 apps).
 
+From Codex's review of the Windows pull request the same day: the orphan sweep judged an empty History afresh at each
+pass, so the first new record let the next pass delete every recording of a lost database. A pass that finds History
+empty with recordings in the folder now saves the time (`sweep-cutoff.txt`), and the sweep never deletes a recording
+written before it; Delete all removes both (both apps). Its paste-proof and spacing-memory findings concern Windows'
+read-back of the caret: Android's paste never restores the clipboard, and counts as inserted only when the field
+accepted ACTION_PASTE.
+
 Deliberate differences from Windows: Windows proves a paste by reading back the text before the caret; Android
 sets text directly and reads the whole field back, so its uncertain case is a field that only looks like a stand-in,
 and its paste path always leaves the text on the clipboard (Android cannot restore it). The correction diff budget

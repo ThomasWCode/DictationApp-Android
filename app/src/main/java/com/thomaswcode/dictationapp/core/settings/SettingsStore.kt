@@ -150,6 +150,12 @@ class SettingsApiKeyProvider(private val settings: SettingsStore, private val se
 class AppPaths(val dataDir: File) {
     val audioDir: File get() = File(dataDir, "audio")
 
+    /**
+     * When History was last found empty with recordings in [audioDir]: the orphan sweep keeps every recording written
+     * before it (see HistoryRetention).
+     */
+    val sweepCutoffFile: File get() = File(dataDir, "sweep-cutoff.txt")
+
     fun newAudioPath(startedAt: Long): String {
         val name = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date(startedAt)) + ".wav"
         return File(audioDir, name).path

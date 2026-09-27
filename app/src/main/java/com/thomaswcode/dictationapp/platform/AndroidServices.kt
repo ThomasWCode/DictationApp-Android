@@ -20,6 +20,7 @@ import com.thomaswcode.dictationapp.ui.MainActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 class AndroidClipboard(private val context: Context) : Clipboard {
     override suspend fun setText(text: String) = withContext(Dispatchers.Main) {
@@ -70,7 +71,8 @@ class HistoryRetention(
         try {
             // Judged before anything is added or deleted: History with no records at all (a lost or recreated database)
             // skips the orphan sweep rather than treat every recording as an orphan, even once recovery below has listed
-            // one in it. Delete all empties the folder itself.
+            // one in it, and the recordings found then stay out of later sweeps (keepCurrentRecordings). Delete all
+            // empties the folder itself.
             val historyWasEmpty = history.stats().count == 0
             if (!recovered) {
                 val result = InterruptedRecordings(history, { settings.current }, paths.audioDir, logger, clock).recover(runStartedAt)
@@ -101,11 +103,18 @@ class HistoryRetention(
 
             // Orphans: WAVs no record references. Recent files may be recording now, and an unfinished one is left for
             // recovery at the next start (a failed save promised that; recovery only looks at earlier runs' files).
-            if (!historyWasEmpty) {
-                val referenced = history.referencedAudioPaths()
-                paths.audioDir.listFiles()
-                    ?.filter { it.isFile && it.path !in referenced && now - it.lastModified() > ORPHAN_GRACE_MS && !WavRepair.isUnfinished(it) }
-                    ?.forEach { if (it.delete()) removedFiles++ }
+            if (historyWasEmpty) {
+                keepCurrentRecordings(now)
+            } else {
+                keptBefore()?.let { keptBefore ->
+                    val referenced = history.referencedAudioPaths()
+                    paths.audioDir.listFiles()
+                        ?.filter {
+                            it.isFile && it.path !in referenced && it.lastModified() >= keptBefore &&
+                                now - it.lastModified() > ORPHAN_GRACE_MS && !WavRepair.isUnfinished(it)
+                        }
+                        ?.forEach { if (it.delete()) removedFiles++ }
+                }
             }
 
             if (removedFiles > 0) logger.info("Retention removed $removedFiles audio file(s)")
@@ -121,7 +130,37 @@ class HistoryRetention(
         // dictation's record pointing at nothing. Retention removes it later if it ends up orphaned.
         val now = clock()
         this.paths.audioDir.listFiles()?.filter { now - it.lastModified() > ACTIVE_RECORDING_GRACE_MS }?.forEach { it.delete() }
+        this.paths.sweepCutoffFile.delete() // the recordings it kept are gone
         return paths.size
+    }
+
+    /**
+     * History is empty, so no recording in the folder can be told from an orphan: a lost or recreated database leaves
+     * every one of its recordings unreferenced. They are kept for good, not only while History stays empty (one new
+     * record would let the next pass sweep them all): the time goes to [AppPaths.sweepCutoffFile], and the sweep leaves
+     * anything written before it. Delete all removes them, and the file.
+     */
+    private fun keepCurrentRecordings(now: Long) {
+        if (paths.audioDir.listFiles()?.any { it.isFile } != true) return
+        if ((keptBefore() ?: 0L) >= now) return
+        try {
+            paths.sweepCutoffFile.writeText(now.toString())
+        } catch (e: IOException) {
+            logger.warn("Could not save which recordings the orphan sweep must keep", e)
+        }
+    }
+
+    /** The time before which the sweep keeps every recording (0: none is kept that way); null when it cannot be read. */
+    private fun keptBefore(): Long? {
+        val file = paths.sweepCutoffFile
+        if (!file.exists()) return 0L
+        val saved = try {
+            file.readText().trim().toLongOrNull()
+        } catch (_: IOException) {
+            null
+        }
+        if (saved == null) logger.warn("The orphan sweep's cutoff could not be read; nothing is swept")
+        return saved
     }
 
     companion object {

@@ -41,6 +41,7 @@ right app, tone and status.
 - [ ] Switch to another app mid-dictation (hands-free), focus a field there, ✓: text goes into the new field.
 - [ ] Wi-Fi off mid-dictation: "Network error" toast, Failed record with audio; Retry in History copies the text.
 - [ ] Start a Retry, leave History, and tap the bubble in a text field: it shakes (busy) until the Retry's toast.
+- [ ] Start a Retry, then delete that dictation (or Delete all history): no "Retry complete" toast, nothing copied.
 - [ ] Revoke the microphone permission: tapping the bubble opens the app and asks for it.
 
 ## Apps

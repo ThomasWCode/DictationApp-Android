@@ -147,6 +147,19 @@ Codex review of the pull request (2026-09-27):
 | A Retry that outlives the History screen could run beside a live dictation, both streaming and both ending on the clipboard. | One at a time: a press during a Retry shakes the bubble; a Retry during a dictation is refused (both apps). |
 | "`setCommunicationDevice` needs MODIFY_AUDIO_SETTINGS on Android 12+, so every Bluetooth route silently fails." | Not changed. AOSP's `setCommunicationDevice` (Android 14 and current main) checks no permission, and on the Galaxy S24 (Android 16), where the app does not hold the permission, the JBL's route came up and Android listed the request. The permission stays declared for Android 11's SCO switch only. |
 
+Its second round (on 4a4c292):
+
+| Finding | Response |
+|---|---|
+| A recording that could not be read at recovery was taken for a finished one, so recovery counted as done and the recording stayed out of History until the next start. | Recovery is done only once every recording could be checked; one that could not be read is tried again at the next pass, and the orphan sweep keeps it meanwhile (both apps). |
+| A field lookup that never returns held the session before the duration cap was running, so the microphone could record without limit. | The lookup is given up after 5 s, at the start and again at insertion; the dictation goes on as for an unknown field (both apps). |
+| A Retry went on streaming a dictation deleted meanwhile (or by Delete all history), then copied it and reported success. | Deleting that dictation, or Delete all history, stops its Retry first; the Retry takes its cancellation handle in the same step as its reservation (both apps). |
+| A failed save of an API key still cleared the pasted key from the form. | The form is cleared only once the key is saved. Windows already kept its fields until a save succeeded. |
+
+Found while fixing those: a Retry whose connection timed out ended without a word, because the time limit's cancellation
+was taken for its caller's. It now fails like any other error, with "Retry failed" and the reason on the record (both
+apps).
+
 Deliberate differences from Windows: Windows proves a paste by reading back the text before the caret; Android
 sets text directly and reads the whole field back, so its uncertain case is a field that only looks like a stand-in,
 and its paste path always leaves the text on the clipboard (Android cannot restore it). The correction diff budget

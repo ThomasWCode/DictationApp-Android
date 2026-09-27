@@ -53,13 +53,41 @@ class FieldInspectorTest {
         assertTrue(FieldInspector.showsPlaceholder(node, "Message", splicing = true))
     }
 
+    /** Shaped like WhatsApp's empty chat box: an EditText with text but no cursor, cursor actions or granularities. */
+    private fun standIn(reported: String) =
+        field(reported, cursor = -1, realLength = 0, canMoveCursor = false).apply { className = "android.widget.EditText" }
+
     @Test
     fun `WhatsApp chat box, an EditText reporting text but no cursor actions, is recognised without moving anything`() {
         // As seen on the device: text "Message", no hint, cursor -1, no SET_SELECTION, no granularities.
-        val node = field("Message", cursor = -1, realLength = 0, canMoveCursor = false).apply { className = "android.widget.EditText" }
+        val node = standIn("Message").apply { viewIdResourceName = FieldInspector.WHATSAPP_CHAT_BOX_ID }
 
         assertTrue(FieldInspector.showsPlaceholder(node, "Message", splicing = false))
         assertTrue(moves.isEmpty())
+    }
+
+    @Test
+    fun `a field Android itself reports empty is recognised whatever its app`() {
+        // TextView offers only the rendering-info extra while it holds no text.
+        val node = standIn("Write a comment").apply { availableExtraData = listOf(AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY) }
+
+        assertTrue(FieldInspector.platformReportsEmpty(node))
+        assertTrue(FieldInspector.showsPlaceholder(node, "Write a comment", splicing = false))
+    }
+
+    @Test
+    fun `a custom field that only looks like a stand-in keeps its text`() {
+        // Flutter and hand-written delegates can report a real draft with no cursor or cursor actions.
+        val node = standIn("Draft reply")
+
+        assertTrue(FieldInspector.looksLikeStandIn(node, "Draft reply"))
+        assertFalse(FieldInspector.reportsTextWithoutCursor(node, "Draft reply"))
+        assertFalse(FieldInspector.showsPlaceholder(node, "Draft reply", splicing = true))
+
+        // The character-location extra appears as soon as a TextView holds real text.
+        node.availableExtraData = listOf(AccessibilityNodeInfo.EXTRA_DATA_RENDERING_INFO_KEY, AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+        assertFalse(FieldInspector.platformReportsEmpty(node))
+        assertFalse(FieldInspector.showsPlaceholder(node, "Draft reply", splicing = true))
     }
 
     @Test
@@ -130,6 +158,13 @@ class FieldInspectorTest {
         assertFalse(FieldInspector.showsPlaceholder(field(long, cursor = 0, realLength = 0), long, splicing = true))
         assertFalse(FieldInspector.showsPlaceholder(field("Dear Sam,\nThanks", cursor = 0, realLength = 0), "Dear Sam,\nThanks", splicing = true))
         assertTrue(moves.isEmpty())
+    }
+
+    @Test
+    fun `text that happens to equal the hint is real when the field shows a cursor`() {
+        val node = field("Meeting notes", cursor = 13).apply { hintText = "Meeting notes" }
+
+        assertEquals("Meeting notes", FieldInspector.readableText(node))
     }
 
     @Test

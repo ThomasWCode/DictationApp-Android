@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Android 11 only: its Bluetooth SCO switch (startBluetoothSco) needs it; Android 12+ selects the headset without it. -->
+    <uses-permission
+        android:name="android.permission.MODIFY_AUDIO_SETTINGS"
+        android:maxSdkVersion="30" />
     <!-- Personal build: app labels in History and the app-rule picker need to see every installed app. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"

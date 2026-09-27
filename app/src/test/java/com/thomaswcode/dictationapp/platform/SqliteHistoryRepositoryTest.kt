@@ -10,6 +10,8 @@ import com.thomaswcode.dictationapp.core.history.RetentionPolicy
 import com.thomaswcode.dictationapp.core.settings.AppPaths
 import com.thomaswcode.dictationapp.core.settings.AppSettings
 import com.thomaswcode.dictationapp.core.FixedSettings
+import com.thomaswcode.dictationapp.core.audio.WavFileSink
+import com.thomaswcode.dictationapp.core.history.InterruptedRecordings
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -124,6 +126,83 @@ class SqliteHistoryRepositoryTest {
         assertFalse(stale.exists())
         assertTrue(recording.exists())
         assertEquals(0, repo.stats().count)
+    }
+
+    @Test
+    fun anEmptyHistoryDoesNotSweepItsRecordingsAsOrphans(): Unit = runBlocking {
+        // A lost or recreated database must not turn every recording into an orphan.
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "empty")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        val lonely = File(paths.audioDir, "lonely.wav").apply { writeText("x"); setLastModified(0) }
+        HistoryRetention(repo, FixedSettings(AppSettings()), paths, NoLogger, clock = { 20L * 86_400_000 }).run()
+        assertTrue(lonely.exists())
+    }
+
+    /** A recording as the app writes it; [finished] false is what a crash or a failed save leaves. */
+    private fun wav(file: File, lastWritten: Long, finished: Boolean): File {
+        val sink = WavFileSink(file.path)
+        sink.write(ByteArray(32_000) { 1 })
+        if (finished) sink.complete() else sink.close()
+        file.setLastModified(lastWritten)
+        return file
+    }
+
+    @Test
+    fun theOrphanSweepLeavesUnfinishedRecordingsForRecovery(): Unit = runBlocking {
+        // A save that failed in this run leaves its recording unfinished and unlisted until the next start lists it; an
+        // app running for hours must not sweep it first.
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "unfinished")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        val now = 20L * 86_400_000
+        repo.insert(record("listed"))
+        val unfinished = wav(File(paths.audioDir, "failed-save.wav"), now - 3_600_000, finished = false)
+        val orphan = wav(File(paths.audioDir, "orphan.wav"), now - 3_600_000, finished = true)
+
+        HistoryRetention(repo, FixedSettings(AppSettings()), paths, NoLogger, clock = { now }, runStartedAt = now - 7_200_000).run()
+
+        assertTrue(unfinished.exists())
+        assertFalse(orphan.exists())
+    }
+
+    @Test
+    fun aLostDatabaseSkipsTheSweepEvenAfterRecoveryListsARecording(): Unit = runBlocking {
+        // An empty History with an unfinished recording from an earlier run: the pass lists it, and the other
+        // recordings, which no record refers to any more, are not swept as orphans.
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "lost")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        val now = 20L * 86_400_000
+        val interrupted = wav(File(paths.audioDir, "interrupted.wav"), now - 3_600_000, finished = false)
+        val unlisted = wav(File(paths.audioDir, "unlisted.wav"), now - 3_600_000, finished = true)
+
+        HistoryRetention(repo, FixedSettings(AppSettings()), paths, NoLogger, clock = { now }, runStartedAt = now - 60_000).run()
+
+        assertEquals(InterruptedRecordings.RECOVERED_REASON, repo.latest()?.failureReason)
+        assertTrue(interrupted.exists())
+        assertTrue(unlisted.exists())
+    }
+
+    @Test
+    fun recordingsFoundWhileHistoryWasEmptyAreKeptOnceItHasRecords(): Unit = runBlocking {
+        // A lost or recreated database: its recordings must survive the first new dictation, not only the first pass.
+        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().filesDir, "rebuilt")
+        val paths = AppPaths(dir)
+        paths.audioDir.mkdirs()
+        var now = 20L * 86_400_000
+        val lost = wav(File(paths.audioDir, "lost.wav"), now - 5 * 86_400_000L, finished = true)
+        val retention = HistoryRetention(repo, FixedSettings(AppSettings()), paths, NoLogger, clock = { now }, runStartedAt = now - 60_000)
+        retention.run()
+
+        now += 3_600_000
+        repo.insert(record("new", createdAt = now, audio = wav(File(paths.audioDir, "new.wav"), now, finished = true).path))
+        val orphan = wav(File(paths.audioDir, "orphan.wav"), now, finished = true) // a failed save once the database was back
+        now += 2 * 86_400_000L
+        retention.run()
+
+        assertTrue(lost.exists())
+        assertFalse(orphan.exists())
     }
 
     @Test

@@ -48,14 +48,27 @@ data class Correction(val from: String, val to: String)
 /**
  * Pure. Word-level longest-common-subsequence diff between the text we inserted and the text after the
  * user edited it. Replaced runs become candidate dictionary terms for "Correct last dictation".
+ * The words both texts start and end with are set aside first, so only the stretch between the first and the last
+ * change is compared; that stretch is refused beyond [MAX_CELLS] ([isTooLong]) instead of allocating a table the
+ * app's memory cannot hold for a long dictation.
  */
 object CorrectionDiffer {
+    /** The most word pairs compared at once: 2,000 × 2,000, 16 MB (Windows allows 4× more; a phone's heap is smaller). */
+    const val MAX_CELLS = 4_000_000L
+
     private val whitespace = Regex("""\s+""")
     private val edgePunctuation = Regex("""\p{P}+(?=\s|$)|(?<=^|\s)\p{P}+""")
 
+    /** True when the changes span too many words to compare in one go (see [MAX_CELLS]). */
+    fun isTooLong(inserted: String, edited: String): Boolean {
+        val (a, b) = changedStretch(tokenise(inserted), tokenise(edited))
+        return (a.size + 1L) * (b.size + 1L) > MAX_CELLS
+    }
+
+    /** The corrections, or none when [isTooLong]. */
     fun diff(inserted: String, edited: String): List<Correction> {
-        val a = tokenise(inserted)
-        val b = tokenise(edited)
+        val (a, b) = changedStretch(tokenise(inserted), tokenise(edited))
+        if ((a.size + 1L) * (b.size + 1L) > MAX_CELLS) return emptyList()
         val lcs = Array(a.size + 1) { IntArray(b.size + 1) }
         for (i in a.indices.reversed()) {
             for (j in b.indices.reversed()) {
@@ -114,4 +127,18 @@ object CorrectionDiffer {
     private fun stripPunctuation(s: String): String = edgePunctuation.replace(s, "").trim()
 
     private fun tokenise(s: String): List<String> = if (s.isBlank()) emptyList() else s.trim().split(whitespace)
+
+    /** The words between the common start and the common end of both texts. */
+    private fun changedStretch(a: List<String>, b: List<String>): Pair<List<String>, List<String>> {
+        var start = 0
+        while (start < a.size && start < b.size && a[start] == b[start]) start++
+        var endA = a.size
+        var endB = b.size
+        while (endA > start && endB > start && a[endA - 1] == b[endB - 1]) {
+            endA--
+            endB--
+        }
+
+        return a.subList(start, endA) to b.subList(start, endB)
+    }
 }

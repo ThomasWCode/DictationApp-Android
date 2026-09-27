@@ -48,6 +48,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -130,6 +132,9 @@ class FakeTranscriber(private val autoConnect: Boolean = false, private val auto
     /** The billed session length the Termination summary reports (0: not reported). */
     @Volatile var sessionSeconds = 0.0
 
+    /** When set, connecting ends in a TimeoutCancellationException, as a withTimeout around it does. */
+    @Volatile var connectTimesOut = false
+
     @Volatile var aborted = false
     override var onTurn: ((TurnMessage) -> Unit)? = null
     override var onFault: ((Throwable) -> Unit)? = null
@@ -137,6 +142,7 @@ class FakeTranscriber(private val autoConnect: Boolean = false, private val auto
     override val connectLatencyMs: Long? = 5
 
     override suspend fun connect(options: SessionOptions): BeginMessage {
+        if (connectTimesOut) withTimeout(1) { awaitCancellation() }
         if (autoConnect) begin.complete(BeginMessage("auto"))
         return begin.await()
     }
@@ -349,6 +355,7 @@ class DictationOrchestratorTest {
     @Volatile private var replaySpeed: Double? = null
     private var sinkProbe: (() -> Int)? = null
     private var lookupGate: CompletableDeferred<Unit>? = null
+    private var lookupTimeoutMs = DictationOrchestrator.LOOKUP_TIMEOUT_MS
     private val editable = ForegroundContext(7, "com.whatsapp", "WhatsApp", "Chat", null, true, false, "EditText")
     private var context = editable
     private val inserter = FakeInserter()
@@ -401,6 +408,7 @@ class DictationOrchestratorTest {
             paths = AppPaths(tmp.root),
             logger = NoLogger,
             hasMicrophonePermission = { micGranted },
+            lookupTimeoutMs = lookupTimeoutMs,
         )
         orchestrator.start(scope)
         scope.launch { hub.flashed.collect { flashes.incrementAndGet() } }
@@ -879,6 +887,71 @@ class DictationOrchestratorTest {
 
         post.gate!!.complete(Unit)
         assertTrue(runBlocking { retry.await() })
+    }
+
+    @Test
+    fun aFieldLookupThatNeverReturnsDoesNotHoldTheDictation() {
+        // A hung app must not keep a hands-free dictation recording before its time limit is even running.
+        lookupGate = CompletableDeferred() // never answered
+        lookupTimeoutMs = 200
+        start()
+        orchestrator.press()
+        orchestrator.enterHandsFree()
+        waitFor("microphone started") { capture.running }
+        transcriber.completeConnect()
+        waitForState(DictationState.Recording)
+        capture.emit(1)
+        transcriber.raiseTurn(0, "Still here.", endOfTurn = true, formatted = true)
+        orchestrator.release()
+        waitForIdleSession()
+
+        // Neither lookup answered, so there was no field to type into: the text is on the clipboard.
+        assertEquals(listOf("STILL HERE."), clipboard.texts.toList())
+    }
+
+    @Test
+    fun deletingADictationStopsItsRetry() {
+        val wav = File(tmp.root, "failed.wav").path
+        WavFileSink(wav).apply {
+            write(ByteArray(AudioFrame.FRAME_BYTES * 4) { 3 })
+            complete()
+        }
+        replayPath = wav
+        transcriberFactory = { FakeTranscriber(autoConnect = true, autoTurnText = "Deleted text.") }
+        post.gate = CompletableDeferred()
+        start()
+        val id = runBlocking { history.insert(DictationRecord(createdAt = 1, updatedAt = 1, status = RecordStatus.Failed, audioPath = wav)) }
+        val retry = scope.async { orchestrator.retry(id) }
+        waitFor("the retry is cleaning up") { post.requests.size == 1 }
+
+        orchestrator.cancelRetry(id)
+
+        assertFalse(runBlocking { withTimeout(5_000) { retry.await() } })
+        assertTrue(clipboard.texts.isEmpty())
+        assertTrue(notifier.toasts.none { it.first.startsWith("Retry") })
+        // The orchestrator is free again (this fake transcriber connects at once, so the dictation is soon recording).
+        orchestrator.press()
+        waitFor("a new dictation started") { orchestrator.state != DictationState.Idle }
+        orchestrator.cancel()
+        waitForIdleSession()
+    }
+
+    @Test
+    fun aRetryWhoseConnectionTimesOutReportsAFailure() {
+        val wav = File(tmp.root, "failed.wav").path
+        WavFileSink(wav).apply {
+            write(ByteArray(AudioFrame.FRAME_BYTES * 4) { 3 })
+            complete()
+        }
+        replayPath = wav
+        transcriberFactory = { FakeTranscriber().apply { connectTimesOut = true } }
+        start()
+        val id = runBlocking { history.insert(DictationRecord(createdAt = 1, updatedAt = 1, status = RecordStatus.Failed, audioPath = wav)) }
+
+        // A timeout is a failure the user is told about, not a cancellation that ends the Retry without a word.
+        assertFalse(runBlocking { withTimeout(5_000) { orchestrator.retry(id) } })
+        assertTrue(notifier.toasts.any { it.first == "Retry failed" })
+        assertEquals("retry: Connection timed out", runBlocking { history.get(id) }!!.failureReason)
     }
 
     @Test

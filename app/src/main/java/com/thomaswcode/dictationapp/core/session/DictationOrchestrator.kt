@@ -88,6 +88,8 @@ class DictationOrchestrator(
     private val logger: Logger,
     private val clock: () -> Long = System::currentTimeMillis,
     private val hasMicrophonePermission: () -> Boolean = { true },
+    /** How long a field lookup may take before the session goes on without it (see [captureWithin]). */
+    private val lookupTimeoutMs: Long = LOOKUP_TIMEOUT_MS,
 ) {
     val machine = DictationStateMachine()
     private val events = Channel<ControlEvent>(Channel.UNLIMITED)
@@ -108,6 +110,10 @@ class DictationOrchestrator(
      * time: a press meanwhile flashes busy, and a Retry during a dictation is refused. Guarded by [ownerLock].
      */
     @Volatile private var retrying = false
+
+    /** The running Retry's own job and record, so deleting that record can stop it ([cancelRetry]). Guarded by [ownerLock]. */
+    private var retryJob: Job? = null
+    private var retryRecordId = 0L
 
     private var badgeSeq = 0
 
@@ -274,16 +280,28 @@ class DictationOrchestrator(
             // can be slow (an app that answers accessibility queries late), so a release, a discard, a fault or the
             // service going away meanwhile stops the microphone at once rather than when the lookup returns: nothing said
             // after the release is recorded.
+            // Bounded too: an app that never answers (hung) must not hold the session, and its microphone, before the
+            // duration cap is even running; the insertion looks at the field again anyway.
+            val deadline = jobs.async { delay(lookupTimeoutMs) }
             val lookup = jobs.async { safeCapture() }
             val endedDuringLookup = select<Boolean> {
                 lookup.onAwait { false }
+                deadline.onAwait { false }
                 s.released.onJoin { true }
                 s.cancelled.onJoin { true }
                 s.faulted.onJoin { true }
                 s.interrupted.onJoin { true }
             }
             if (endedDuringLookup) capture.stop()
-            s.context = lookup.await()
+            s.context = select {
+                lookup.onAwait { it }
+                deadline.onAwait {
+                    lookup.cancel()
+                    logger.warn("Field lookup took over $lookupTimeoutMs ms; going on without it")
+                    ForegroundContext.Unknown
+                }
+            }
+            deadline.cancel()
             s.mark("lookup")
             s.rule = AppRulesResolver.resolve(s.context, settings.appRules, settings.defaultTone, settings.defaultCleanupLevel, settings.insertMethod)
             s.tone = s.rule.tone
@@ -429,7 +447,7 @@ class DictationOrchestrator(
             // 6. Inserting. Re-check the focused field; if focus moved to another field, insert there but keep
             // the tone chosen at the start. If focus went nowhere, the original field is tried.
             publishSession(s, DictationState.Inserting, "Inserting")
-            val current = safeCapture()
+            val current = captureWithin(jobs)
             val target = if (current.isEditable) current else s.context
             // Tone and cleanup stay as chosen at the start, but how the text goes in depends on where it lands:
             // finishing in Gmail after starting in a plain editor must use Gmail's rule (e.g. Paste). An address that
@@ -699,6 +717,15 @@ class DictationOrchestrator(
 
     private fun buildSessionOptions(settings: AppSettings) = sessionOptions(settings)
 
+    /** The field with focus now, or [ForegroundContext.Unknown] after [lookupTimeoutMs] (an app that does not answer). */
+    private suspend fun captureWithin(jobs: CoroutineScope): ForegroundContext {
+        val lookup = jobs.async { safeCapture() }
+        return withTimeoutOrNull(lookupTimeoutMs) { lookup.await() } ?: ForegroundContext.Unknown.also {
+            lookup.cancel()
+            logger.warn("Field lookup took over $lookupTimeoutMs ms; going on without it")
+        }
+    }
+
     private suspend fun safeCapture(): ForegroundContext = try {
         foreground.capture()
     } catch (e: Exception) {
@@ -745,56 +772,34 @@ class DictationOrchestrator(
             return false
         }
 
-        val busy = synchronized(ownerLock) {
-            when {
-                retrying -> "A retry is already running."
-                !machine.isIdle || session != null -> "Finish the current dictation first."
-                else -> {
-                    retrying = true // until this retry ends; it outlives the History screen
-                    null
+        var reserved = false
+        return try {
+            // Its own scope, taken in the same step as the reservation: cancelRetry (the record is being deleted) ends
+            // the retry however soon after the start it comes, without cancelling the caller.
+            coroutineScope {
+                val busy = synchronized(ownerLock) {
+                    when {
+                        retrying -> "A retry is already running."
+                        !machine.isIdle || session != null -> "Finish the current dictation first."
+                        else -> {
+                            retrying = true // until this retry ends; it outlives the History screen
+                            reserved = true
+                            retryJob = coroutineContext[Job]
+                            retryRecordId = recordId
+                            null
+                        }
+                    }
+                }
+                if (busy == null) {
+                    retryStreaming(record, audio, recordId)
+                } else {
+                    notifier.toast("Retry", busy, ToastKind.Warning)
+                    false
                 }
             }
-        }
-        if (busy != null) {
-            notifier.toast("Retry", busy, ToastKind.Warning)
-            return false
-        }
-
-        return try {
-            val settings = settings.current
-            val transcript = transcribeWav(audio, RETRY_REPLAY_SPEED, null)
-            record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.sttCost(settings.speechModel, billedSeconds(transcript.termination, transcript.wallClockMs / 1000.0))
-            record.updatedAt = clock()
-            if (transcript.termination == null) {
-                logger.warn("Retry of record $recordId ended without a Termination summary; keeping the earlier transcript")
-                record.failureReason = "retry: the transcription did not finish"
-                history.update(record)
-                notifier.toast("Retry failed", "The transcription did not finish. The recording is kept; try Retry again.", ToastKind.Warning)
-                return false
-            }
-
-            if (transcript.text.isBlank()) {
-                record.failureReason = "retry: nothing heard"
-                history.update(record)
-                notifier.toast("Retry", "Nothing was heard in the recording.", ToastKind.Warning)
-                return false
-            }
-
-            val request = PostProcessRequest(record.level, record.tone, KeytermsSelector.select(settings.dictionary), record.appName, record.url, null, pauseMarkedTranscript = transcript.pauseMarkedText)
-            val result = postProcessor.process(transcript.text, request)
-            reportCleanupProblem(result.configurationProblem, result.applied)
-            clipboardGate.withLock { clipboard.setText(result.text) }
-            record.rawTranscript = transcript.text
-            record.cleanedText = if (result.applied) result.text else ""
-            record.insertedText = result.text
-            record.llmModel = result.model
-            record.status = RecordStatus.CopiedOnly
-            record.failureReason = if (result.applied) null else result.failureReason
-            record.updatedAt = clock()
-            record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.llmCost(result.model, result.promptTokens, result.completionTokens)
-            history.update(record)
-            notifier.toast("Retry complete", "Text copied to the clipboard.", ToastKind.Success)
-            true
+        } catch (e: RetryStopped) {
+            logger.info("Retry of record $recordId stopped: the dictation is being deleted")
+            false
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             logger.error("Retry of record $recordId failed", e)
@@ -803,8 +808,62 @@ class DictationOrchestrator(
             notifier.toast("Retry failed", e.message ?: e.javaClass.simpleName, ToastKind.Error)
             false
         } finally {
-            synchronized(ownerLock) { retrying = false }
+            if (reserved) {
+                synchronized(ownerLock) {
+                    retrying = false
+                    retryJob = null
+                }
+            }
         }
+    }
+
+    /**
+     * Stops a running Retry of [recordId] (any Retry when null) before its record or recording is deleted: otherwise it
+     * would keep streaming the deleted audio and then put the deleted dictation on the clipboard.
+     */
+    fun cancelRetry(recordId: Long? = null) {
+        val job = synchronized(ownerLock) { retryJob.takeIf { retrying && (recordId == null || recordId == retryRecordId) } }
+        job?.cancel(RetryStopped())
+    }
+
+    /** How [cancelRetry] ends a Retry: told apart from a cancellation of the Retry's caller, which goes on up. */
+    private class RetryStopped : CancellationException("the dictation is being deleted")
+
+    private suspend fun retryStreaming(record: DictationRecord, audio: String, recordId: Long): Boolean {
+        val settings = settings.current
+        val transcript = transcribeWav(audio, RETRY_REPLAY_SPEED, null)
+        record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.sttCost(settings.speechModel, billedSeconds(transcript.termination, transcript.wallClockMs / 1000.0))
+        record.updatedAt = clock()
+        if (transcript.termination == null) {
+            logger.warn("Retry of record $recordId ended without a Termination summary; keeping the earlier transcript")
+            record.failureReason = "retry: the transcription did not finish"
+            history.update(record)
+            notifier.toast("Retry failed", "The transcription did not finish. The recording is kept; try Retry again.", ToastKind.Warning)
+            return false
+        }
+
+        if (transcript.text.isBlank()) {
+            record.failureReason = "retry: nothing heard"
+            history.update(record)
+            notifier.toast("Retry", "Nothing was heard in the recording.", ToastKind.Warning)
+            return false
+        }
+
+        val request = PostProcessRequest(record.level, record.tone, KeytermsSelector.select(settings.dictionary), record.appName, record.url, null, pauseMarkedTranscript = transcript.pauseMarkedText)
+        val result = postProcessor.process(transcript.text, request)
+        reportCleanupProblem(result.configurationProblem, result.applied)
+        clipboardGate.withLock { clipboard.setText(result.text) }
+        record.rawTranscript = transcript.text
+        record.cleanedText = if (result.applied) result.text else ""
+        record.insertedText = result.text
+        record.llmModel = result.model
+        record.status = RecordStatus.CopiedOnly
+        record.failureReason = if (result.applied) null else result.failureReason
+        record.updatedAt = clock()
+        record.costEstimate = (record.costEstimate ?: 0.0) + CostEstimator.llmCost(result.model, result.promptTokens, result.completionTokens)
+        history.update(record)
+        notifier.toast("Retry complete", "Text copied to the clipboard.", ToastKind.Success)
+        return true
     }
 
     /** Streams a WAV file through a fresh transcriber session. Used by Retry and the debug stream test. */
@@ -835,7 +894,12 @@ class DictationOrchestrator(
         transcriber.onFault = { e -> done.completeExceptionally(e) }
         try {
             val started = clock()
-            withTimeout(CONNECT_TIMEOUT_MS + 2_000) { transcriber.connect(buildSessionOptions(settings)) }
+            try {
+                withTimeout(CONNECT_TIMEOUT_MS + 2_000) { transcriber.connect(buildSessionOptions(settings)) }
+            } catch (e: TimeoutCancellationException) {
+                // A failure Retry reports, as in a dictation; left as a cancellation it would end the Retry without a word.
+                throw TimeoutException("Connection timed out")
+            }
             capture.start()
             coroutineScope {
                 val sender = launch { for (frame in frames) transcriber.sendAudio(frame.pcm16) }
@@ -949,6 +1013,9 @@ class DictationOrchestrator(
         const val DICTATION_MAX_TURN_SILENCE_MS = 3_600
 
         const val CONNECT_TIMEOUT_MS = 3_000L
+
+        /** A field lookup normally takes tens of milliseconds; one that takes this long is given up. */
+        const val LOOKUP_TIMEOUT_MS = 5_000L
         const val HANDSHAKE_CAP_MS = 2_500L
 
         /**

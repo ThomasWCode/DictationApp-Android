@@ -278,6 +278,7 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
                     confirmDelete = false
                     val r = record ?: return@TextButton
                     player.stop()
+                    graph.orchestrator.cancelRetry(r.id) // a Retry of it must not go on streaming and copying it
                     scope.launch {
                         graph.history.delete(r.id)
                         r.audioPath?.let { File(it).delete() }

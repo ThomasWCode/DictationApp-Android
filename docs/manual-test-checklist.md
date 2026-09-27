@@ -40,6 +40,7 @@ right app, tone and status.
 - [ ] Dictating for over the limit (set 1 minute): stops with a toast and inserts.
 - [ ] Switch to another app mid-dictation (hands-free), focus a field there, ✓: text goes into the new field.
 - [ ] Wi-Fi off mid-dictation: "Network error" toast, Failed record with audio; Retry in History copies the text.
+- [ ] Start a Retry, leave History, and tap the bubble in a text field: it shakes (busy) until the Retry's toast.
 - [ ] Revoke the microphone permission: tapping the bubble opens the app and asks for it.
 
 ## Apps

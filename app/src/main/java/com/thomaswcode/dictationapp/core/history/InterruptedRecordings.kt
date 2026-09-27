@@ -38,13 +38,19 @@ object WavRepair {
     }
 
     /** True when [file] is an unfinished recording; reads only, the file is left as it is. */
-    fun isUnfinished(file: File): Boolean = try {
+    fun isUnfinished(file: File): Boolean = unfinishedPcmBytes(file) != null
+
+    /**
+     * The audio byte count (cut to whole samples) [repairUnfinished] would write when [file] is an unfinished recording;
+     * null for anything else. Reads only, the file is left as it is.
+     */
+    fun unfinishedPcmBytes(file: File): Long? = try {
         RandomAccessFile(file, "r").use { raf ->
-            val layout = layout(raf) ?: return false
-            layout.unfinished((raf.length() - layout.dataOffset) and 1L.inv())
+            val layout = layout(raf) ?: return null
+            ((raf.length() - layout.dataOffset) and 1L.inv()).takeIf { layout.unfinished(it) }
         }
     } catch (_: IOException) {
-        false
+        null
     }
 
     private class Layout(val riffSize: Long, val dataOffset: Long, val dataSize: Long) {
@@ -76,7 +82,9 @@ object WavRepair {
 
 /**
  * Recordings a previous run left unfinished (killed, crashed, battery out while recording or before saving) are
- * repaired and listed in History as Failed, so Retry can transcribe them. Nothing is uploaded or pasted. Only files
+ * repaired and listed in History as Failed, so Retry can transcribe them. Nothing is uploaded or pasted. A file's sizes
+ * are written only once History lists it: a database error before that leaves it unfinished, so the next pass recovers
+ * it instead of the sweep later taking it for a finished orphan. Only files
  * last written before [runStartedAt] (this run's start) are touched, never the file of a dictation now running. A
  * recording shorter than [MIN_RECOVERED_MS], or older than the retention settings keep, is deleted.
  */
@@ -98,7 +106,7 @@ class InterruptedRecordings(
         for (file in files) {
             try {
                 if (file.lastModified() >= runStartedAt) continue
-                val pcm = WavRepair.repairUnfinished(file) ?: continue
+                val pcm = WavRepair.unfinishedPcmBytes(file) ?: continue
                 val durationMs = pcm * 1000 / WavRepair.BYTES_PER_SECOND
                 val recordedAt = recordingTime(file) ?: file.lastModified()
                 if (durationMs < MIN_RECOVERED_MS || (keepFor != null && recordedAt < now - keepFor)) {
@@ -109,6 +117,7 @@ class InterruptedRecordings(
 
                 val refs = referenced ?: history.referencedAudioPaths().also { referenced = it }
                 if (file.path in refs) {
+                    WavRepair.repairUnfinished(file)
                     logger.info("Repaired an unfinished recording that History already lists (${durationMs / 1000.0} s)")
                     continue
                 }
@@ -126,6 +135,7 @@ class InterruptedRecordings(
                     ),
                 )
                 added++
+                WavRepair.repairUnfinished(file) // now that History lists it
                 logger.info("Recovered an interrupted recording (${durationMs / 1000.0} s) into History for Retry")
             } catch (e: IOException) {
                 logger.debug("Could not check ${file.name} for recovery: ${e.message}")

@@ -37,20 +37,23 @@ object WavRepair {
         pcm
     }
 
-    /** True when [file] is an unfinished recording; reads only, the file is left as it is. */
-    fun isUnfinished(file: File): Boolean = unfinishedPcmBytes(file) != null
+    /**
+     * True when [file] is an unfinished recording, or cannot be read to tell: the orphan sweep must then keep it. Reads
+     * only, the file is left as it is.
+     */
+    fun isUnfinished(file: File): Boolean = try {
+        unfinishedPcmBytes(file) != null
+    } catch (_: IOException) {
+        true
+    }
 
     /**
      * The audio byte count (cut to whole samples) [repairUnfinished] would write when [file] is an unfinished recording;
-     * null for anything else. Reads only, the file is left as it is.
+     * null for anything else. Throws when the file cannot be read (so a caller can try again later). Reads only.
      */
-    fun unfinishedPcmBytes(file: File): Long? = try {
-        RandomAccessFile(file, "r").use { raf ->
-            val layout = layout(raf) ?: return null
-            ((raf.length() - layout.dataOffset) and 1L.inv()).takeIf { layout.unfinished(it) }
-        }
-    } catch (_: IOException) {
-        null
+    fun unfinishedPcmBytes(file: File): Long? = RandomAccessFile(file, "r").use { raf ->
+        val layout = layout(raf) ?: return null
+        ((raf.length() - layout.dataOffset) and 1L.inv()).takeIf { layout.unfinished(it) }
     }
 
     private class Layout(val riffSize: Long, val dataOffset: Long, val dataSize: Long) {
@@ -94,19 +97,27 @@ class InterruptedRecordings(
     private val audioDir: File,
     private val logger: Logger,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Reads a recording's state; replaceable so tests can make a file fail to read. */
+    private val inspect: (File) -> Long? = WavRepair::unfinishedPcmBytes,
 ) {
-    /** Returns the number of recordings added to History. */
-    suspend fun recover(runStartedAt: Long): Int {
-        val files = audioDir.listFiles { f -> f.isFile && f.name.endsWith(".wav") } ?: return 0
+    /**
+     * [added] recordings were listed in History. [complete] is false when a recording could not be read: the caller
+     * then runs recovery again at a later pass rather than leave that recording out until the next start.
+     */
+    data class Result(val added: Int, val complete: Boolean)
+
+    suspend fun recover(runStartedAt: Long): Result {
+        val files = audioDir.listFiles { f -> f.isFile && f.name.endsWith(".wav") } ?: return Result(0, complete = true)
         val s = settings()
         val now = clock()
         val keepFor = listOfNotNull(s.historyRetention.millis, s.audioRetention.millis).minOrNull()
         var referenced: Set<String>? = null
         var added = 0
+        var complete = true
         for (file in files) {
             try {
                 if (file.lastModified() >= runStartedAt) continue
-                val pcm = WavRepair.unfinishedPcmBytes(file) ?: continue
+                val pcm = inspect(file) ?: continue
                 val durationMs = pcm * 1000 / WavRepair.BYTES_PER_SECOND
                 val recordedAt = recordingTime(file) ?: file.lastModified()
                 if (durationMs < MIN_RECOVERED_MS || (keepFor != null && recordedAt < now - keepFor)) {
@@ -138,11 +149,12 @@ class InterruptedRecordings(
                 WavRepair.repairUnfinished(file) // now that History lists it
                 logger.info("Recovered an interrupted recording (${durationMs / 1000.0} s) into History for Retry")
             } catch (e: IOException) {
-                logger.debug("Could not check ${file.name} for recovery: ${e.message}")
+                complete = false
+                logger.warn("Could not check ${file.name} for recovery; trying again at the next pass: ${e.message}")
             }
         }
 
-        return added
+        return Result(added, complete)
     }
 
     companion object {

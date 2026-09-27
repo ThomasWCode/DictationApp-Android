@@ -33,6 +33,8 @@ right app, tone and status.
       transcribes it. (App info › Force stop works too, but Android then switches the bubble service off until it is
       switched on again.)
 - [ ] Hold: red with moving bars; release inserts; slide away turns grey with ✕ and releasing discards.
+- [ ] Speak normally, then quietly with the phone at arm's length, then loudly close up: within a second or two the
+      bars swing through most of their height each time; stay silent and they settle at the bottom.
 - [ ] Tapping the bubble while it is breathing blue shakes it and does nothing else.
 - [ ] Speak "new line", "period", "scratch that", "number one … number two …": applied correctly.
 - [ ] With no Groq key: raw text inserted, amber ring (cleanup skipped).

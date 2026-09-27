@@ -18,6 +18,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -44,7 +45,7 @@ class InterruptedRecordingsTest {
     }
 
     private fun recover() = runBlocking {
-        InterruptedRecordings(history, { AppSettings() }, tmp.root, NoLogger, clock = { now }).recover(runStart)
+        InterruptedRecordings(history, { AppSettings() }, tmp.root, NoLogger, clock = { now }).recover(runStart).added
     }
 
     @Test
@@ -102,6 +103,20 @@ class InterruptedRecordingsTest {
         assertNotNull(WavRepair.unfinishedPcmBytes(file))
         assertEquals(1, recover())
         assertNull(WavRepair.unfinishedPcmBytes(file))
+        assertEquals(file.path, history.records.single().audioPath)
+    }
+
+    @Test
+    fun aRecordingThatCannotBeReadIsTriedAgainAtTheNextPass() {
+        // A read error must not look like a finished file: recovery reports itself incomplete so the next pass (not the
+        // next start) tries again, and the sweep keeps what it cannot read.
+        val file = recording(now - 3_600_000, lastWritten = runStart - 10_000)
+        val unreadable: (File) -> Long? = { throw IOException("too many open files") }
+
+        val first = runBlocking { InterruptedRecordings(history, { AppSettings() }, tmp.root, NoLogger, clock = { now }, inspect = unreadable).recover(runStart) }
+
+        assertEquals(InterruptedRecordings.Result(added = 0, complete = false), first)
+        assertEquals(1, recover())
         assertEquals(file.path, history.records.single().audioPath)
     }
 

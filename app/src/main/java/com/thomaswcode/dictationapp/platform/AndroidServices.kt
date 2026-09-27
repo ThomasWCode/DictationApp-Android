@@ -73,8 +73,11 @@ class HistoryRetention(
             // one in it. Delete all empties the folder itself.
             val historyWasEmpty = history.stats().count == 0
             if (!recovered) {
-                val added = InterruptedRecordings(history, { settings.current }, paths.audioDir, logger, clock).recover(runStartedAt)
-                recovered = true // only once it succeeded: a database error leaves it for the next pass
+                val result = InterruptedRecordings(history, { settings.current }, paths.audioDir, logger, clock).recover(runStartedAt)
+                // Done only once every recording could be checked: a database error, or a file that could not be read,
+                // leaves recovery for the next pass.
+                recovered = result.complete
+                val added = result.added
                 if (added > 0) {
                     notifier?.toast(
                         "Dictation recovered",

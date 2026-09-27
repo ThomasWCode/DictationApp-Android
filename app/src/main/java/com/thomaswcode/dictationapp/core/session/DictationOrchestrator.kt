@@ -6,6 +6,7 @@ import com.thomaswcode.dictationapp.core.audio.AudioCaptureFactory
 import com.thomaswcode.dictationapp.core.audio.AudioFrame
 import com.thomaswcode.dictationapp.core.audio.AudioSink
 import com.thomaswcode.dictationapp.core.audio.AudioSinkFactory
+import com.thomaswcode.dictationapp.core.audio.LevelMeter
 import com.thomaswcode.dictationapp.core.audio.MicrophoneAccessDeniedException
 import com.thomaswcode.dictationapp.core.audio.MicrophoneUnavailableException
 import com.thomaswcode.dictationapp.core.cleanup.CleanupLevel
@@ -117,6 +118,9 @@ class DictationOrchestrator(
 
     private var badgeSeq = 0
 
+    /** Scales the microphone's level to the user's speaking volume for the bubble's bars, learning across dictations. */
+    private val microphoneLevels = LevelMeter()
+
     /** Cleanup settings problems already shown this run (one toast each). */
     private val reportedCleanupProblems = HashSet<String>()
 
@@ -198,7 +202,9 @@ class DictationOrchestrator(
                     hub.flash() // a Retry is streaming (see retrying)
                 } else if (machine.isIdle && session == null) {
                     machine.fire(DictationTrigger.Press)
-                    val s = DictationSession(clock(), ev.wavPath)
+                    // A test recording gets a meter of its own: it is far louder than a voice, and teaching the
+                    // microphone's meter its level would leave the bars barely moving in the next dictation.
+                    val s = DictationSession(clock(), ev.wavPath, if (ev.wavPath == null) microphoneLevels else LevelMeter())
                     val previous = sessionJob
                     session = s
                     sessionJob = scope.launch {
@@ -249,7 +255,7 @@ class DictationOrchestrator(
                 activeSink?.write(frame.pcm16)
                 s.frames.trySend(frame)
                 s.onFrame(frame)
-                hub.update { it.copy(level = frame.peak) }
+                hub.update { it.copy(level = s.lastLevel) }
             }
             capture.onFault = { s.fault(it) }
             capture.start()
@@ -740,7 +746,7 @@ class DictationOrchestrator(
             DictationStatus(
                 state = state,
                 liveText = s.assembler.liveText,
-                level = s.lastPeak,
+                level = s.lastLevel,
                 tone = s.tone,
                 cleanupLevel = s.level,
                 badge = badge,
@@ -930,7 +936,7 @@ class DictationOrchestrator(
     }
 
     /** Mutable per-dictation state shared between the control loop and the session job. */
-    private class DictationSession(val startedAt: Long, val simulatedWavPath: String?) {
+    private class DictationSession(val startedAt: Long, val simulatedWavPath: String?, private val levels: LevelMeter) {
         val released = CompletableDeferred<Unit>()
 
         /** Completes with true for a silent cancel (no badge). */
@@ -957,7 +963,8 @@ class DictationOrchestrator(
 
         @Volatile var transcriber: StreamingTranscriber? = null
 
-        @Volatile var lastPeak = 0f
+        /** The bubble's bar height for the latest frame (see [LevelMeter]). */
+        @Volatile var lastLevel = 0f
 
         @Volatile var maxPeak = 0f
 
@@ -983,7 +990,7 @@ class DictationOrchestrator(
 
         fun onFrame(frame: AudioFrame) {
             bytes.addAndGet(frame.pcm16.size.toLong())
-            lastPeak = frame.peak
+            lastLevel = levels.add(frame.peak)
             if (frame.peak > maxPeak) maxPeak = frame.peak
             frameCount++
         }

@@ -98,9 +98,18 @@ Each Windows class became a Kotlin file with the same responsibilities and const
 - Two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble and hide target), `FLAG_NOT_FOCUSABLE | FLAG_LAYOUT_IN_SCREEN |
   FLAG_LAYOUT_NO_LIMITS`, cut-out mode ALWAYS, positioned in screen coordinates (the same space as the keyboard
   window bounds). Hidden means `GONE` + `FLAG_NOT_TOUCHABLE`, so it never blocks touches.
-- `BubbleView` draws the circle, microphone glyph, level bars (square-root scaled peaks, smoothed, with a slight
+- `BubbleView` draws the circle, microphone glyph, level bars (heights from `LevelMeter`, smoothed, with a slight
   wobble so a steady voice still looks alive), the hands-free pill and outcome rings on a Canvas, invalidating
   every frame only while animating.
+- `LevelMeter` (in `core/audio`, fed each frame's peak by the orchestrator) scales the bars to the user's voice, in
+  decibels: the noise is the third-quietest of the last 30 frames (3 s), a frame 10 dB above it is speech, and the
+  average speaking level is a plain mean over the first 10 speech frames, then a moving average (8% per frame, each
+  frame counted as at most 10 dB away, so a tap barely moves it). The bars are full 5 dB above the average speaking
+  level and empty 6 dB above the noise, kept 12 to 25 dB below the speaking level: without the 12 dB limit, three
+  seconds of speech without a quiet frame became the noise reading and emptied the bars mid-sentence. Frames at or
+  below −80 dBFS are ignored, and the bars stay down until speech has been heard. Every step is relative, so the
+  same speech shows the same bars at any microphone volume. The orchestrator keeps one meter for the microphone
+  across dictations; a replayed test WAV gets a fresh one.
 - `BubbleController` owns gesture handling (confirm-press timer, tap/hold threshold, slide-to-cancel, drag,
   snap animation, snooze drop target), visibility, idle shrink, opacity and haptics, and persists the side and
   height after a drag.

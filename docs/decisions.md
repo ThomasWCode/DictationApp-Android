@@ -176,13 +176,24 @@ Porting rule: the two apps share their core design line by line. A change to sha
 cleanup, retry, history, settings, formatting) is made in both repositories in the same round, each with its own
 regression test, and a deliberate difference is recorded in both decisions files.
 
+## Level bars scaled to the voice (2026-09-27)
+
+| Request | Decision | Why |
+|---|---|---|
+| "The bars hardly move when I speak, although the dictation works fine. Increase the sensitivity, by a set amount or by looking at my average speaking volume." The user preferred the second: the sensitivity follows their speaking volume live. | The bars' height comes from `LevelMeter` (see `implementation.md`) in place of the square root of the peak: it learns the average speaking level as the user talks and draws the bars between the room's noise and a little above that level. One meter serves the microphone and keeps its learning between dictations; a test recording replayed through the debug hook gets its own. | The phone's `VOICE_RECOGNITION` source has no automatic gain control, so speech from a phone held away often peaks at −25 to −40 dBFS, where the square-root scale drew the bars at a third of their height or less, while the replayed test WAVs (peaking near full scale) filled them. The same speech peaks up to 30 dB apart from one microphone, distance or room to the next, so a set boost that moved the bars for a quiet voice would pin a close or headset voice at the top. Measuring against the user's own level moves the bars alike at any volume (a simulation on the phone's saved recordings, played back up to 30 dB quieter, drew the same bars), and measuring against the noise keeps them still in silence. A test WAV taught to the microphone's meter would leave the next dictation's bars nearly empty. |
+
+A deliberate difference from Windows: its flow bar keeps the square root of the peak. The user asked for the Android
+bubble only; the bars are display, not shared behaviour, so the porting rule does not apply.
+
 ## Testing notes
 
 - JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol
   parsing, session options, rules, keyterms, differ, formatter, cost, settings store, WAV I/O and repair, state
   machine), the LLM client against MockWebServer (fallback chain, 401 stop, cut-off replies, validation,
   per-attempt and total timeouts), the orchestrator with in-memory fakes (lifecycle, discards, teardown, delivery,
-  History Insert, Retry, cost), interrupted-recording recovery, the SQLite/FTS4 history, the placeholder check and
+  History Insert, Retry, cost, the bubble's level after a test replay), the level meter (the same bars at any volume,
+  still in silence, first second, taps, stray frames, a noisier room), interrupted-recording recovery, the
+  SQLite/FTS4 history, the placeholder check and
   the insertion routes under Robolectric, microphone selection, the website memory, and the Android
   regex-compatibility scan. The README does not quote a count, which goes stale.
 - The accessibility, overlay and microphone code needs a device; see `manual-test-checklist.md`.

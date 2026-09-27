@@ -138,6 +138,15 @@ Pre-push review (same day), fixed before the first push:
 | "Scratch that" right after "new line" deleted the sentence before it. | Only the line break is retracted (both apps). |
 | A test of the discard/release race passed without the fix. | It now checks the "Discarded" outcome. |
 
+Codex review of the pull request (2026-09-27):
+
+| Finding | Response |
+|---|---|
+| Recovery repaired a recording's header before listing it, so a database error left a finished, unlisted file that the sweep later deleted. | The sizes are written only once History lists it (both apps). |
+| A release, discard or teardown during a slow field lookup did not stop the microphone until the lookup returned. | The lookup runs beside the session and those stop the microphone at once (both apps). |
+| A Retry that outlives the History screen could run beside a live dictation, both streaming and both ending on the clipboard. | One at a time: a press during a Retry shakes the bubble; a Retry during a dictation is refused (both apps). |
+| "`setCommunicationDevice` needs MODIFY_AUDIO_SETTINGS on Android 12+, so every Bluetooth route silently fails." | Not changed. AOSP's `setCommunicationDevice` (Android 14 and current main) checks no permission, and on the Galaxy S24 (Android 16), where the app does not hold the permission, the JBL's route came up and Android listed the request. The permission stays declared for Android 11's SCO switch only. |
+
 Deliberate differences from Windows: Windows proves a paste by reading back the text before the caret; Android
 sets text directly and reads the whole field back, so its uncertain case is a field that only looks like a stand-in,
 and its paste path always leaves the text on the clipboard (Android cannot restore it). The correction diff budget

@@ -13,7 +13,6 @@ import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /**
  * The floating bubble, drawn by hand so the overlay needs no Compose runtime or lifecycle. Modes:
@@ -35,7 +34,7 @@ class BubbleView(context: Context) : View(context) {
             invalidate()
         }
 
-    /** Microphone peak (0..1) of the latest frame. */
+    /** Height of the level bars (0..1) for the latest frame, already scaled to the user's speaking volume. */
     var level: Float = 0f
 
     /** In hold mode the finger has slid far enough away that releasing will discard. */
@@ -169,8 +168,7 @@ class BubbleView(context: Context) : View(context) {
     }
 
     private fun drawBars(canvas: Canvas, cx: Float, cy: Float, width: Float, maxHeight: Float, now: Long) {
-        // Speech peaks sit around 0.05-0.5; a square root spreads them over the bar height.
-        val shown = if (level <= 0f) 0f else min(1f, sqrt(level) * 1.5f)
+        val shown = level.coerceIn(0f, 1f)
         val t = now / 1000f
         val step = width / BAR_COUNT
         val barWidth = step * 0.55f

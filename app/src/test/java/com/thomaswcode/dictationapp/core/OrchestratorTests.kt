@@ -1082,6 +1082,53 @@ class DictationOrchestratorTest {
     }
 
     @Test
+    fun aReplayedTestRecordingDoesNotTeachTheBarsItsLevel() {
+        // A test recording peaks near full scale, far above a voice; had the microphone's meter learned it, the next
+        // dictation's quiet voice would show empty bars.
+        val room = 0.0013f // -58 dBFS
+        val voice = 0.01f // -40 dBFS
+        start()
+
+        /** Records until the bubble shows the recording (after which only frames change its level), feeds [frames], and finishes. */
+        fun session(n: Int, wavPath: String?, frames: () -> Unit) {
+            if (wavPath == null) orchestrator.press() else orchestrator.simulateDictationFromWav(wavPath)
+            waitForArmed()
+            waitFor("transcriber $n") { transcribers.size == n }
+            transcribers[n - 1].completeConnect()
+            waitFor("bubble recording") { hub.current.state == DictationState.Recording }
+            frames()
+            transcribers[n - 1].raiseTurn(0, "Words.", endOfTurn = true, formatted = true)
+            orchestrator.release()
+            waitForIdleSession()
+        }
+
+        var learned = 0f
+        session(1, null) {
+            repeat(5) { capture.emit(1, room) }
+            repeat(15) {
+                capture.emit(1, voice)
+                capture.emit(1, voice * 1.4f)
+            }
+            capture.emit(1, voice)
+            learned = hub.current.level
+        }
+        assertTrue("the voice fills the bars: $learned", learned >= 0.5f)
+
+        session(2, File(tmp.root, "test.wav").path) {
+            repeat(3) { capture.emit(1, room) }
+            repeat(30) { capture.emit(1, 0.9f) }
+        }
+
+        var shown = 0f
+        session(3, null) {
+            repeat(2) { capture.emit(1, room) }
+            capture.emit(1, voice)
+            shown = hub.current.level
+        }
+        assertEquals(learned, shown, 0.05f)
+    }
+
+    @Test
     fun aRecurringCleanupProblemIsReportedOncePerRun() {
         post.respond = { raw -> PostProcessResult(raw.uppercase(), true, "b", null, configurationProblem = "The Groq key may not use a.") }
         start()

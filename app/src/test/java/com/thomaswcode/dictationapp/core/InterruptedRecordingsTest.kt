@@ -3,6 +3,7 @@ package com.thomaswcode.dictationapp.core
 import com.thomaswcode.dictationapp.core.audio.AudioFrame
 import com.thomaswcode.dictationapp.core.audio.WavFileSink
 import com.thomaswcode.dictationapp.core.history.DictationRecord
+import com.thomaswcode.dictationapp.core.history.HistoryRepository
 import com.thomaswcode.dictationapp.core.history.InterruptedRecordings
 import com.thomaswcode.dictationapp.core.history.RecordStatus
 import com.thomaswcode.dictationapp.core.history.WavRepair
@@ -84,6 +85,24 @@ class InterruptedRecordingsTest {
         assertEquals(0, recover())
         assertEquals(1, history.records.size)
         assertNull(WavRepair.repairUnfinished(file))
+    }
+
+    @Test
+    fun aDatabaseErrorDuringRecoveryLeavesTheRecordingRecoverable() {
+        // The sizes are written only once History lists the recording: after a failed insert the next pass recovers it,
+        // instead of the sweep later taking a repaired but unlisted file for an orphan.
+        val file = recording(now - 3_600_000, lastWritten = runStart - 10_000)
+        val locked = object : HistoryRepository by history {
+            override suspend fun insert(record: DictationRecord): Long = throw IllegalStateException("database is locked")
+        }
+
+        val failed = runCatching { runBlocking { InterruptedRecordings(locked, { AppSettings() }, tmp.root, NoLogger, clock = { now }).recover(runStart) } }
+
+        assertTrue(failed.isFailure)
+        assertNotNull(WavRepair.unfinishedPcmBytes(file))
+        assertEquals(1, recover())
+        assertNull(WavRepair.unfinishedPcmBytes(file))
+        assertEquals(file.path, history.records.single().audioPath)
     }
 
     @Test

@@ -691,6 +691,7 @@ fun PrivacySettingsScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     confirm = false
                     scope.launch {
+                        graph.orchestrator.cancelRetry() // a running Retry must not stream and copy a deleted dictation
                         graph.retention.deleteAll()
                         graph.logger.deleteAll()
                         refresh++

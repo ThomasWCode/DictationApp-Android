@@ -44,6 +44,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -839,6 +840,45 @@ class DictationOrchestratorTest {
         lookupGate!!.complete(Unit)
         orchestrator.cancel()
         waitForIdleSession()
+    }
+
+    @Test
+    fun aReleaseDuringASlowFieldLookupStopsTheMicrophoneAtOnce() {
+        lookupGate = CompletableDeferred()
+        start()
+        orchestrator.press()
+        waitFor("microphone started") { capture.running }
+
+        orchestrator.release()
+        waitFor("microphone stopped while the lookup is still running") { !capture.running }
+
+        lookupGate!!.complete(Unit)
+        transcriber.completeConnect()
+        waitForIdleSession()
+    }
+
+    @Test
+    fun aPressWhileARetryStreamsFlashesBusyAndStartsNothing() {
+        val wav = File(tmp.root, "failed.wav").path
+        WavFileSink(wav).apply {
+            write(ByteArray(AudioFrame.FRAME_BYTES * 4) { 3 })
+            complete()
+        }
+        replayPath = wav
+        transcriberFactory = { FakeTranscriber(autoConnect = true, autoTurnText = "Recovered text.") }
+        post.gate = CompletableDeferred()
+        start()
+        val id = runBlocking { history.insert(DictationRecord(createdAt = 1, updatedAt = 1, status = RecordStatus.Failed, audioPath = wav)) }
+
+        val retry = scope.async { orchestrator.retry(id) }
+        waitFor("the retry is cleaning up") { post.requests.size == 1 }
+        orchestrator.press()
+        waitFor("busy flash") { flashes.get() == 1 }
+        assertEquals(DictationState.Idle, orchestrator.state)
+        assertEquals(1, transcribers.size)
+
+        post.gate!!.complete(Unit)
+        assertTrue(runBlocking { retry.await() })
     }
 
     @Test

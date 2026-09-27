@@ -46,6 +46,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -101,6 +102,12 @@ class DictationOrchestrator(
     @Volatile private var session: DictationSession? = null
 
     @Volatile private var sessionJob: Job? = null
+
+    /**
+     * Set while a Retry streams. A dictation and a Retry both stream to AssemblyAI and end on the clipboard, so one at a
+     * time: a press meanwhile flashes busy, and a Retry during a dictation is refused. Guarded by [ownerLock].
+     */
+    @Volatile private var retrying = false
 
     private var badgeSeq = 0
 
@@ -181,7 +188,9 @@ class DictationOrchestrator(
     private fun dispatch(ev: ControlEvent) {
         when (ev) {
             is ControlEvent.Press -> synchronized(ownerLock) {
-                if (machine.isIdle && session == null) {
+                if (retrying) {
+                    hub.flash() // a Retry is streaming (see retrying)
+                } else if (machine.isIdle && session == null) {
                     machine.fire(DictationTrigger.Press)
                     val s = DictationSession(clock(), ev.wavPath)
                     val previous = sessionJob
@@ -261,8 +270,20 @@ class DictationOrchestrator(
             }
             jobs.launch { watchForSilentMicrophone(s) }
 
-            // 3. Where the user is: the focused field, its app and website, and the app rule (tone and level).
-            s.context = safeCapture()
+            // 3. Where the user is: the focused field, its app and website, and the app rule (tone and level). The lookup
+            // can be slow (an app that answers accessibility queries late), so a release, a discard, a fault or the
+            // service going away meanwhile stops the microphone at once rather than when the lookup returns: nothing said
+            // after the release is recorded.
+            val lookup = jobs.async { safeCapture() }
+            val endedDuringLookup = select<Boolean> {
+                lookup.onAwait { false }
+                s.released.onJoin { true }
+                s.cancelled.onJoin { true }
+                s.faulted.onJoin { true }
+                s.interrupted.onJoin { true }
+            }
+            if (endedDuringLookup) capture.stop()
+            s.context = lookup.await()
             s.mark("lookup")
             s.rule = AppRulesResolver.resolve(s.context, settings.appRules, settings.defaultTone, settings.defaultCleanupLevel, settings.insertMethod)
             s.tone = s.rule.tone
@@ -724,8 +745,18 @@ class DictationOrchestrator(
             return false
         }
 
-        if (!machine.isIdle) {
-            notifier.toast("Retry", "Finish the current dictation first.", ToastKind.Warning)
+        val busy = synchronized(ownerLock) {
+            when {
+                retrying -> "A retry is already running."
+                !machine.isIdle || session != null -> "Finish the current dictation first."
+                else -> {
+                    retrying = true // until this retry ends; it outlives the History screen
+                    null
+                }
+            }
+        }
+        if (busy != null) {
+            notifier.toast("Retry", busy, ToastKind.Warning)
             return false
         }
 
@@ -771,6 +802,8 @@ class DictationOrchestrator(
             runCatching { history.update(record) }
             notifier.toast("Retry failed", e.message ?: e.javaClass.simpleName, ToastKind.Error)
             false
+        } finally {
+            synchronized(ownerLock) { retrying = false }
         }
     }
 

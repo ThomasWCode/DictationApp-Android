@@ -415,9 +415,9 @@ fun ApiSettingsScreen(onBack: () -> Unit) {
                 stored = s.hasApiKey,
                 placeholder = "Paste your AssemblyAI API key",
                 onSave = {
-                    val key = assemblyKey.trim()
-                    graph.settings.update { it.copy(apiKeyProtected = graph.secrets.protect(key)) }
-                    assemblyKey = ""
+                    // The field is cleared only once the key is saved: a failed save (storage full) keeps it to try again.
+                    val protected = graph.secrets.protect(assemblyKey.trim())
+                    if (graph.settings.update { it.copy(apiKeyProtected = protected) }.apiKeyProtected == protected) assemblyKey = ""
                 },
                 onRemove = { graph.settings.update { it.copy(apiKeyProtected = null) } },
             )
@@ -432,9 +432,8 @@ fun ApiSettingsScreen(onBack: () -> Unit) {
                 stored = s.hasGroqKey,
                 placeholder = "Paste your Groq API key",
                 onSave = {
-                    val key = groqKey.trim()
-                    graph.settings.update { it.copy(groqApiKeyProtected = graph.secrets.protect(key)) }
-                    groqKey = ""
+                    val protected = graph.secrets.protect(groqKey.trim())
+                    if (graph.settings.update { it.copy(groqApiKeyProtected = protected) }.groqApiKeyProtected == protected) groqKey = ""
                 },
                 onRemove = { graph.settings.update { it.copy(groqApiKeyProtected = null) } },
             )

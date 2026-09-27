@@ -26,7 +26,7 @@ Docs: [features](docs/features.md) Â· [implementation](docs/implementation.md) Â
 
 The app is built as a debug APK and is not signed for the Play Store.
 
-1. Build it (below) or take `app-debug.apk` from a build, and install it:
+1. Build it on this computer (below) and install it over the installed app:
    ```powershell
    adb install -r app\build\outputs\apk\debug\app-debug.apk
    ```
@@ -49,13 +49,29 @@ Requirements: JDK 17 (Android Studio's bundled JDK 21 also works) and the Androi
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot"
-.\gradlew testDebugUnitTest      # 114 JVM/Robolectric tests
+.\gradlew testDebugUnitTest      # JVM and Robolectric tests
 .\gradlew assembleDebug          # app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Debug builds are signed with the machine's `~/.android/debug.keystore`. An APK built on another machine (or by
-CI) has a different signature, so uninstall the old app before installing it; that also deletes its settings
-and history.
+Debug builds are signed with this computer's `~/.android/debug.keystore`, and Android installs an update only over
+an app with the same signature. So build on this computer, or copy `debug.keystore` to a new computer before
+building there. **Never uninstall** to get round a signature mismatch: uninstalling deletes the settings, the
+Keystore key that decrypts the API keys, and the whole History. Keystores are kept out of the repository
+(`.gitignore`), and CI does not publish APKs for the same reason.
+
+To back up the settings and History first (the debug build allows `run-as`; `cmd /c` keeps PowerShell from
+re-encoding the binary output):
+
+```powershell
+cmd /c "adb exec-out run-as com.thomaswcode.dictationapp tar c files databases > dictationapp-backup.tar"
+```
+
+The API keys in a backup are encrypted with a Keystore key that never leaves the phone, so after a reinstall they
+have to be entered again.
+
+Porting rule: this app and the Windows app share their core design line by line. A change to shared behaviour
+(session lifecycle, cleanup, retry, history, settings, formatting) is made in both repositories in the same round,
+each with its own regression test, and a deliberate difference is recorded in both `docs/decisions.md` files.
 
 ## Debug hooks (adb)
 
@@ -73,6 +89,8 @@ adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.STREAM_TEST --
 adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.SIMULATE --es path /sdcard/Android/data/$pkg/files/sample.wav --ei delay 5
 # Log the focused field's structure to logcat (add --ez text true for its text, --eia probe 1,5 to test cursor moves)
 adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.DUMP_FOCUS
+# Log every window the service can see and how much of it (an app hiding its views shows a window with no tree)
+adb shell am broadcast -n $pkg/.debug.DebugReceiver -a $pkg.debug.DUMP_WINDOWS
 ```
 
 ## Layout

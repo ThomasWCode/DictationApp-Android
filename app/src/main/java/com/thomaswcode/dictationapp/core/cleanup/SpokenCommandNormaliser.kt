@@ -51,15 +51,26 @@ object SpokenCommandNormaliser {
         else -> command
     }
 
-    /** Drops the text before each "scratch that" back to the previous sentence boundary or line start. */
+    /**
+     * Drops what each "scratch that" retracts: the clause before it, back to the previous sentence boundary or line
+     * start. When the transcriber already ended that clause with a full stop ("Send it to Bob. Scratch that."), that
+     * sentence is the one retracted, so the search starts before its own terminator; otherwise nothing was dropped.
+     */
     private fun resolveScratches(input: String): String {
         var s = input
         while (s.contains(SCRATCH_MARKER)) {
             val idx = s.indexOf(SCRATCH_MARKER)
-            var before = s.substring(0, idx)
+            var before = s.substring(0, idx).trimEnd(' ', '\t')
             val after = s.substring(idx + SCRATCH_MARKER.length)
-            val cut = maxOf(maxOf(before.lastIndexOf('.'), before.lastIndexOf('?')), maxOf(before.lastIndexOf('!'), before.lastIndexOf('\n')))
-            before = if (cut >= 0) before.substring(0, cut + 1) else ""
+            if (before.endsWith('\n')) {
+                // Right after "new line" or "new paragraph" the line break is the last thing said: only it is retracted.
+                before = before.trimEnd('\n', ' ', '\t')
+            } else {
+                if (before.isNotEmpty() && before.last() in ".?!") before = before.dropLast(1)
+                val cut = maxOf(maxOf(before.lastIndexOf('.'), before.lastIndexOf('?')), maxOf(before.lastIndexOf('!'), before.lastIndexOf('\n')))
+                before = if (cut >= 0) before.substring(0, cut + 1) else ""
+            }
+
             s = before.trimEnd() + if (after.isNotEmpty()) " " + after.trimStart() else ""
         }
 

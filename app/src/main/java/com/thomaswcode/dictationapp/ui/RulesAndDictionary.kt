@@ -174,6 +174,11 @@ fun CorrectionScreen(onBack: () -> Unit) {
             FilledTonalButton(onClick = {
                 candidates.clear()
                 chosen.clear()
+                if (CorrectionDiffer.isTooLong(original, edited)) {
+                    status = "The changes are too far apart to compare in one go. Correct a few nearby words, add them, then open Correct last dictation again for the rest."
+                    return@FilledTonalButton
+                }
+
                 CorrectionDiffer.diff(original, edited).forEach { c ->
                     val to = CorrectionDiffer.suggestTerms(listOf(c)).firstOrNull() ?: return@forEach
                     candidates += c.from to to

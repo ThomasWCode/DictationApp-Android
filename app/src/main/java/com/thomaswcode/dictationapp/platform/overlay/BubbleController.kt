@@ -172,10 +172,12 @@ class BubbleController(
 
         if (!s.isActive && s.badge != null && s.badgeSeq != lastBadgeSeq) {
             lastBadgeSeq = s.badgeSeq
-            when (s.badge) {
-                "cleanup skipped" -> view.ring(BubbleView.AMBER)
-                "Failed" -> view.ring(BubbleView.RED)
-                "Nothing heard" -> view.shake()
+            // A badge can combine outcomes ("cleanup skipped · also copied"); the bubble shows the ones it can draw.
+            val badge = s.badge
+            when {
+                "cleanup skipped" in badge -> view.ring(BubbleView.AMBER)
+                "Failed" in badge -> view.ring(BubbleView.RED)
+                "Nothing heard" in badge -> view.shake()
             }
         }
 

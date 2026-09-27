@@ -300,6 +300,35 @@ class DictionaryTest {
     }
 
     @Test
+    fun aLongTextWithOneFixIsComparedQuickly() {
+        // The unchanged words before and after the fix are set aside, so a 10,000-word dictation costs nothing extra.
+        val words = (0 until 10_000).map { "word$it" }
+        val inserted = words.take(5_000).joinToString(" ") + " ice on ice id " + words.drop(5_000).joinToString(" ")
+        val edited = words.take(5_000).joinToString(" ") + " isoniazid " + words.drop(5_000).joinToString(" ")
+
+        assertFalse(CorrectionDiffer.isTooLong(inserted, edited))
+        assertEquals("isoniazid", CorrectionDiffer.diff(inserted, edited).single().to)
+    }
+
+    @Test
+    fun changesSpreadOverTooManyWordsAreRefusedNotAllocated() {
+        val words = (0 until 3_000).joinToString(" ") { "word$it" }
+        val inserted = "alpha $words omega"
+        val edited = "ALPHA $words OMEGA"
+
+        assertTrue(CorrectionDiffer.isTooLong(inserted, edited))
+        assertTrue(CorrectionDiffer.diff(inserted, edited).isEmpty())
+    }
+
+    @Test
+    fun aFixNextToARepeatedWordIsFound() {
+        // With the shared ending set aside first, "their" is compared with "there" rather than lost to the repeat.
+        val diff = CorrectionDiffer.diff("their there", "there there").single()
+        assertEquals("their", diff.from)
+        assertEquals("there", diff.to)
+    }
+
+    @Test
     fun differFindsReplacedWords() {
         val diff = CorrectionDiffer.diff("please start the ice on ice id today", "please start the isoniazid today")
         assertEquals(1, diff.size)

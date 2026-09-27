@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- No packageNames filter: the bubble has to work in every app. Content-changed events are not requested
-     (they fire constantly); focus, window and selection changes are enough to follow the keyboard. -->
+     (they fire constantly); focus, window and selection changes are enough to follow the keyboard.
+     isAccessibilityTool: dictation is an input tool, and Android 14+ hides views an app marks as data-sensitive
+     from every other kind of service. Gmail marks its whole compose screen that way, so without this the bubble
+     never sees the Subject or the body there. Android 11 ignores the attribute; it has no data-sensitive views. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:isAccessibilityTool="true"
     android:accessibilityEventTypes="typeViewFocused|typeViewClicked|typeViewTextSelectionChanged|typeWindowStateChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="50"
-    android:settingsActivity="com.thomaswcode.dictationapp.ui.MainActivity" />
+    android:settingsActivity="com.thomaswcode.dictationapp.ui.MainActivity"
+    tools:ignore="UnusedAttribute" />

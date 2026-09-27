@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -52,11 +53,15 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -335,11 +340,13 @@ fun AudioSettingsScreen(onBack: () -> Unit, requestMicrophone: () -> Unit) {
                 requestMicrophone()
             } else {
                 var peak = 0f
-                capture = MicrophoneCapture(context, s.microphoneDevice, graph.logger).also { c ->
+                var notice: String? = null
+                capture = MicrophoneCapture(context, s.microphoneDevice, graph.logger) { notice = it }.also { c ->
                     c.onFrame = { f ->
                         level = f.peak
                         peak = maxOf(peak, f.peak)
-                        testStatus = if (peak < 1e-4f) "Listening… no sound yet" else "Peak ${(peak * 100).roundToInt()}%"
+                        val heard = if (peak < 1e-4f) "Listening… no sound yet" else "Peak ${(peak * 100).roundToInt()}%"
+                        testStatus = listOfNotNull("$heard, recording from ${c.recordingFrom}.", notice).joinToString("\n")
                     }
                     c.onFault = { e -> testStatus = "Could not open the microphone: ${e.message}" }
                     c.start()
@@ -356,7 +363,7 @@ fun AudioSettingsScreen(onBack: () -> Unit, requestMicrophone: () -> Unit) {
     SubScreen("Audio", onBack) {
         SectionHeader("Microphone")
         Panel {
-            RadioRow<String?>(null, s.microphoneDevice, "Default", "The phone picks (usually the built-in microphone).") { v -> graph.settings.update { it.copy(microphoneDevice = v) } }
+            RadioRow<String?>(null, s.microphoneDevice, "Default", "The phone's own microphone. A connected headset is used only when you choose it below.") { v -> graph.settings.update { it.copy(microphoneDevice = v) } }
             devices.forEach { d ->
                 RadioRow<String?>(d.key, s.microphoneDevice, d.name) { v -> graph.settings.update { it.copy(microphoneDevice = v) } }
             }
@@ -380,7 +387,7 @@ fun AudioSettingsScreen(onBack: () -> Unit, requestMicrophone: () -> Unit) {
             }
         }
 
-        Hint("Audio is recorded at 16 kHz mono, exactly what AssemblyAI streams, so nothing is converted. A Bluetooth headset is switched to its call microphone while you dictate. If the meter stays flat, another app may be using the microphone.")
+        Hint("Audio is recorded at 16 kHz mono, exactly what AssemblyAI streams, so nothing is converted. A chosen Bluetooth headset is switched to its call microphone while you dictate; that takes a second or so, and the phone's microphone records until then. If the headset cannot be switched, the phone's microphone records and you are told once. If the meter stays flat, another app may be using the microphone.")
     }
 }
 
@@ -408,9 +415,9 @@ fun ApiSettingsScreen(onBack: () -> Unit) {
                 stored = s.hasApiKey,
                 placeholder = "Paste your AssemblyAI API key",
                 onSave = {
-                    val key = assemblyKey.trim()
-                    graph.settings.update { it.copy(apiKeyProtected = graph.secrets.protect(key)) }
-                    assemblyKey = ""
+                    // The field is cleared only once the key is saved: a failed save (storage full) keeps it to try again.
+                    val protected = graph.secrets.protect(assemblyKey.trim())
+                    if (graph.settings.update { it.copy(apiKeyProtected = protected) }.apiKeyProtected == protected) assemblyKey = ""
                 },
                 onRemove = { graph.settings.update { it.copy(apiKeyProtected = null) } },
             )
@@ -425,9 +432,8 @@ fun ApiSettingsScreen(onBack: () -> Unit) {
                 stored = s.hasGroqKey,
                 placeholder = "Paste your Groq API key",
                 onSave = {
-                    val key = groqKey.trim()
-                    graph.settings.update { it.copy(groqApiKeyProtected = graph.secrets.protect(key)) }
-                    groqKey = ""
+                    val protected = graph.secrets.protect(groqKey.trim())
+                    if (graph.settings.update { it.copy(groqApiKeyProtected = protected) }.groqApiKeyProtected == protected) groqKey = ""
                 },
                 onRemove = { graph.settings.update { it.copy(groqApiKeyProtected = null) } },
             )
@@ -445,6 +451,7 @@ fun ApiSettingsScreen(onBack: () -> Unit) {
                         groqKey.trim().ifEmpty { graph.keys.llmKey().orEmpty() },
                         baseUrl,
                         model,
+                        fallbacks,
                     )
                     testing = false
                 }
@@ -504,8 +511,12 @@ private fun KeyEditor(value: String, onValue: (String) -> Unit, stored: Boolean,
     }
 }
 
-/** Mirrors Windows' "Test keys": a streaming token proves the AssemblyAI key, a tiny completion proves Groq. */
-private suspend fun testKeys(graph: com.thomaswcode.dictationapp.AppGraph, assemblyKey: String, groqKey: String, baseUrl: String, model: String): String {
+/**
+ * Mirrors Windows' "Test keys": a streaming token proves the AssemblyAI key, and a tiny completion with every model of
+ * the chain proves the Groq key and each model together, so a fallback that would fail (retired, not allowed for the
+ * key) is found now rather than mid-dictation.
+ */
+private suspend fun testKeys(graph: com.thomaswcode.dictationapp.AppGraph, assemblyKey: String, groqKey: String, baseUrl: String, model: String, fallbacks: String): String {
     if (assemblyKey.isEmpty() && groqKey.isEmpty()) return "Enter at least one key first."
     val parts = mutableListOf<String>()
     try {
@@ -519,24 +530,39 @@ private suspend fun testKeys(graph: com.thomaswcode.dictationapp.AppGraph, assem
         if (groqKey.isEmpty()) {
             parts += "Groq: no key (cleanup falls back to raw text)."
         } else {
-            val m = model.trim().ifEmpty { AppSettings.DEFAULT_LLM_MODEL }
             val base = baseUrl.trim().ifEmpty { AppSettings.DEFAULT_LLM_BASE_URL }.trimEnd('/') + "/"
-            val body: JsonObject = buildJsonObject {
-                put("model", m)
-                putJsonArray("messages") {
-                    addJsonObject {
-                        put("role", "user")
-                        put("content", "Reply OK")
+            val primary = model.trim().ifEmpty { AppSettings.DEFAULT_LLM_MODEL }
+            val chain = (listOf(primary) + fallbacks.split(',').map { it.trim() }.filter { it.isNotEmpty() }).distinctBy { it.lowercase() }
+            val results = mutableListOf<String>()
+            for (m in chain) {
+                val body: JsonObject = buildJsonObject {
+                    put("model", m)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            put("content", "Reply OK")
+                        }
                     }
+                    put("max_tokens", 8)
+                    LlmPostProcessor.reasoningEffortFor(m)?.let { put("reasoning_effort", JsonPrimitive(it)) }
                 }
-                put("max_tokens", 8)
-                LlmPostProcessor.reasoningEffortFor(m)?.let { put("reasoning_effort", JsonPrimitive(it)) }
+                val req = Request.Builder().url(base + "chat/completions").header("Authorization", "Bearer $groqKey")
+                    .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+                val code = graph.http.newCall(req).await().use { resp ->
+                    results += if (resp.isSuccessful) "$m OK" else "$m: " + when (resp.code) {
+                        401 -> "key rejected"
+                        403 -> "this key may not use the model (allow it in the Groq console, or pick another)"
+                        404 -> "model not found or retired; pick one from the free tier"
+                        429 -> "rate limited (the free tier caps requests and tokens per minute and per day); try again later"
+                        else -> "HTTP ${resp.code} ${resp.body?.string().orEmpty().take(100)}"
+                    }
+                    resp.code
+                }
+
+                if (code == 401) break // the key itself is rejected: every other model would say the same
             }
-            val req = Request.Builder().url(base + "chat/completions").header("Authorization", "Bearer $groqKey")
-                .post(body.toString().toRequestBody("application/json".toMediaType())).build()
-            graph.http.newCall(req).await().use { resp ->
-                parts += if (resp.isSuccessful) "Groq: OK ($m)." else "Groq: rejected (HTTP ${resp.code}): ${resp.body?.string().orEmpty().take(160)}"
-            }
+
+            parts += "Groq: " + results.joinToString("; ") + "."
         }
     } catch (e: Exception) {
         parts += "Test failed: ${e.message}"
@@ -553,6 +579,21 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     val s by graph.settings.flow.collectAsStateWithLifecycle()
     var minutes by remember(s.maxDictationMinutes) { mutableStateOf(s.maxDictationMinutes.toString()) }
     var languages by remember(s.languageCodes) { mutableStateOf(s.languageCodes.orEmpty()) }
+
+    // Typed values are saved once typed (Done, leaving the field or the screen), not at every keystroke: a dictation
+    // started meanwhile would otherwise get "e" for "en, de", and each save is a write to disk.
+    val focus = LocalFocusManager.current
+    val typedMinutes by rememberUpdatedState(minutes)
+    val typedLanguages by rememberUpdatedState(languages)
+    val saveMinutes = { typedMinutes.toIntOrNull()?.let { m -> graph.settings.update { it.copy(maxDictationMinutes = m.coerceIn(1, 180)) } } }
+    val saveLanguages = { graph.settings.update { it.copy(languageCodes = typedLanguages.trim().ifEmpty { null }) } }
+    DisposableEffect(Unit) {
+        onDispose {
+            saveMinutes()
+            saveLanguages()
+        }
+    }
+
     SubScreen("General", onBack) {
         SectionHeader("Insertion")
         Panel {
@@ -566,14 +607,12 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = minutes,
-                    onValueChange = { v ->
-                        minutes = v.filter { it.isDigit() }.take(3)
-                        minutes.toIntOrNull()?.let { m -> graph.settings.update { it.copy(maxDictationMinutes = m.coerceIn(1, 180)) } }
-                    },
+                    onValueChange = { v -> minutes = v.filter { it.isDigit() }.take(3) },
                     label = { Text("Stop a dictation automatically after (minutes)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) saveMinutes() },
                 )
             }
         }
@@ -584,14 +623,13 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = languages,
-                    onValueChange = { v ->
-                        languages = v
-                        graph.settings.update { it.copy(languageCodes = v.trim().ifEmpty { null }) }
-                    },
+                    onValueChange = { v -> languages = v },
                     label = { Text("Language codes") },
                     placeholder = { Text("e.g. en, de") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused) saveLanguages() },
                 )
             }
         }
@@ -652,6 +690,7 @@ fun PrivacySettingsScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     confirm = false
                     scope.launch {
+                        graph.orchestrator.cancelRetry() // a running Retry must not stream and copy a deleted dictation
                         graph.retention.deleteAll()
                         graph.logger.deleteAll()
                         refresh++

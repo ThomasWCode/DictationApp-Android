@@ -59,10 +59,10 @@ import androidx.navigation.NavHostController
 import com.thomaswcode.dictationapp.core.history.DictationRecord
 import com.thomaswcode.dictationapp.core.history.HistoryStats
 import com.thomaswcode.dictationapp.core.history.RecordStatus
-import com.thomaswcode.dictationapp.core.insertion.ToastKind
-import com.thomaswcode.dictationapp.core.session.DictationOrchestrator
 import com.thomaswcode.dictationapp.platform.audio.WavPlayer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -205,24 +205,22 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
                 (context as? Activity)?.moveTaskToBack(true)
                 graph.scope.launch {
                     delay(700)
-                    val target = graph.bridge.capture()
-                    if (target.isEditable && !target.isPassword) {
-                        // The destination app's rule decides how the text goes in (e.g. Paste for a rich editor).
-                        graph.bridge.insert(r.displayText, target, DictationOrchestrator.insertMethodFor(target, graph.settings.current))
-                    } else {
-                        graph.clipboard.setText(r.displayText)
-                        graph.notifier.toast("Copied to clipboard", "No text field has focus.", ToastKind.Info)
-                    }
+                    // The same delivery as a dictation's: the destination app's rule, the same checks and toasts.
+                    graph.orchestrator.reinsert(r.displayText)
                 }
             }
             ActionButton(Icons.Rounded.Refresh, "Retry", enabled = !busy && r.hasAudio && (r.status == RecordStatus.Failed || r.status == RecordStatus.Pending)) {
                 busy = true
                 status = "Re-streaming audio…"
-                scope.launch {
+                // In the app's scope: a retry takes as long as the recording, and leaving this screen must not cancel it
+                // (the session would be aborted, already billed, with nothing saved). Its toast reports the result.
+                graph.scope.launch {
                     val ok = graph.orchestrator.retry(r.id)
-                    status = if (ok) "Retry complete; text copied to the clipboard." else "Retry did not produce text."
-                    busy = false
-                    reload++
+                    withContext(Dispatchers.Main) {
+                        status = if (ok) "Retry complete; text copied to the clipboard." else "Retry did not produce text."
+                        busy = false
+                        reload++
+                    }
                 }
             }
             ActionButton(Icons.AutoMirrored.Rounded.Undo, "Undo AI edit", enabled = r.canUndoAiEdit) {
@@ -280,6 +278,7 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
                     confirmDelete = false
                     val r = record ?: return@TextButton
                     player.stop()
+                    graph.orchestrator.cancelRetry(r.id) // a Retry of it must not go on streaming and copying it
                     scope.launch {
                         graph.history.delete(r.id)
                         r.audioPath?.let { File(it).delete() }

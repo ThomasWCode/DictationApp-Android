@@ -7,6 +7,7 @@ import com.thomaswcode.dictationapp.core.audio.WavFileSink
 import com.thomaswcode.dictationapp.core.cleanup.LlmPostProcessor
 import com.thomaswcode.dictationapp.core.cleanup.PassthroughPostProcessor
 import com.thomaswcode.dictationapp.core.cleanup.PostProcessorRouter
+import com.thomaswcode.dictationapp.core.insertion.ToastKind
 import com.thomaswcode.dictationapp.core.session.DictationOrchestrator
 import com.thomaswcode.dictationapp.core.session.StatusHub
 import com.thomaswcode.dictationapp.core.settings.AppPaths
@@ -46,7 +47,10 @@ class DictationApp : Application() {
 /** Everything wired together once per process: the Android counterpart of the Windows Generic Host. */
 class AppGraph(val app: Application) {
     val logger = AppLog(File(app.filesDir, "logs"))
-    val settings = JsonSettingsStore(File(app.filesDir, "settings.json"), logger)
+    val notifier = AndroidNotifier(app, logger)
+    val settings = JsonSettingsStore(File(app.filesDir, "settings.json"), logger) { e ->
+        notifier.toast("Settings not saved", e.message ?: "The phone's storage may be full.", ToastKind.Warning)
+    }
     val secrets = KeystoreSecretStore()
     val keys = SettingsApiKeyProvider(settings, secrets)
     val http: OkHttpClient = OkHttpClient.Builder()
@@ -57,10 +61,11 @@ class AppGraph(val app: Application) {
     val history = SqliteHistoryRepository(app)
     val hub = StatusHub()
     val clipboard = AndroidClipboard(app)
-    val notifier = AndroidNotifier(app)
     val bridge = AccessibilityBridge(clipboard, logger)
     val llm = LlmPostProcessor(http, keys, { settings.current }, logger)
-    val retention = HistoryRetention(history, settings, paths, logger)
+    /** When this process started: recordings last written before it were left by an earlier run. */
+    private val startedAt = System.currentTimeMillis()
+    val retention = HistoryRetention(history, settings, paths, logger, notifier = notifier, runStartedAt = startedAt)
 
     /** Epoch millis until which the bubble is hidden (dragged onto the "Hide 10 min" target). */
     val snoozedUntil = MutableStateFlow(0L)
@@ -70,7 +75,7 @@ class AppGraph(val app: Application) {
     )
 
     val orchestrator = DictationOrchestrator(
-        captures = AndroidAudioCaptureFactory(app, logger),
+        captures = AndroidAudioCaptureFactory(app, logger, notifier),
         sinks = { path -> WavFileSink(path) },
         transcribers = { AssemblyAiStreamingTranscriber(http, keys, logger) },
         foreground = bridge,

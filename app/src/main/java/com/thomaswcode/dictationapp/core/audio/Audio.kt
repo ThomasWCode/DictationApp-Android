@@ -35,6 +35,11 @@ interface AudioCapture : Closeable {
 
     fun start()
 
+    /**
+     * Stops capturing. A microphone delivers its last frame (zero-padded to a whole frame, as AssemblyAI takes chunks of
+     * 50 ms or more) through [onFrame] before this returns, and no frame follows it: the caller relies on this to end
+     * the recording exactly at the release and still keep its last syllable.
+     */
     fun stop()
 }
 
@@ -52,7 +57,7 @@ interface AudioSink : Closeable {
 
     fun write(pcm16: ByteArray)
 
-    /** Finalises the file header. */
+    /** Finalises the file header. Called once the History record that refers to the file is saved. */
     fun complete()
 
     /** Deletes the file. */
@@ -65,3 +70,9 @@ fun interface AudioSinkFactory {
 
 /** Thrown when the OS refuses microphone access (permission revoked or not yet granted). */
 class MicrophoneAccessDeniedException(message: String) : Exception(message)
+
+/**
+ * Thrown when the microphone cannot be opened or started although access is granted: another app is using it, or the
+ * device is gone. Unlike [MicrophoneAccessDeniedException] there is no permission to ask for.
+ */
+class MicrophoneUnavailableException(message: String) : Exception(message)

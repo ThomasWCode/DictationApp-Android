@@ -7,7 +7,12 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-/** Streams 16 kHz mono PCM16 to a WAV file; the RIFF sizes are patched in [complete]. */
+/**
+ * Streams 16 kHz mono PCM16 to a WAV file; the RIFF sizes are patched in [complete], which the session calls once the
+ * History record that points to the file is saved. A file left by a crash or a kill therefore still says its data is
+ * empty, and HistoryMaintenance recovers it at the next start instead of deleting it as an orphan. [close] without
+ * [complete] keeps that marker.
+ */
 class WavFileSink(override val path: String) : AudioSink {
     private val file = File(path)
     private var raf: RandomAccessFile? = null
@@ -46,8 +51,10 @@ class WavFileSink(override val path: String) : AudioSink {
     }
 
     override fun close() = synchronized(lock) {
-        // Completing on close keeps a readable file if the caller forgot; discard() already cleared raf.
-        if (raf != null) complete()
+        // Not completed here: the "unfinished" marker must survive a session that ended before its record was saved.
+        runCatching { raf?.close() }
+        raf = null
+        Unit
     }
 
     companion object {
@@ -134,7 +141,11 @@ class WavData(val sampleRate: Int, val channels: Int, val pcm16: ByteArray) {
     }
 }
 
-/** Replays a WAV file as 100 ms frames, paced at real time divided by [speed]. */
+/**
+ * Replays a WAV file as 100 ms frames, paced at real time divided by [speed]. The app's own recordings (16 kHz mono)
+ * are read a frame at a time, so a long recording is never held in memory (twice) as it was; other formats (the debug
+ * hook's test files) are converted in memory. The last frame is zero-padded to a whole frame.
+ */
 class WavReplayAudioCapture(private val path: String, private val speed: Double) : AudioCapture {
     override var onFrame: ((AudioFrame) -> Unit)? = null
     override var onFault: ((Throwable) -> Unit)? = null
@@ -146,23 +157,21 @@ class WavReplayAudioCapture(private val path: String, private val speed: Double)
         if (!running.compareAndSet(false, true)) return
         worker = thread(name = "wav-replay", isDaemon = true) {
             try {
-                val pcm = WavData.read(path).toMono16k()
                 val frameDelayMs = (AudioFrame.FRAME_MS / speed.coerceAtLeast(0.1)).toLong()
-                var offset = 0
                 var position = 0L
-                while (running.get() && offset < pcm.size) {
-                    val len = minOf(AudioFrame.FRAME_BYTES, pcm.size - offset)
-                    val chunk = pcm.copyOfRange(offset, offset + len)
-                    onFrame?.invoke(AudioFrame(chunk, AudioFrame.peakOf(chunk), position))
-                    offset += len
+                frames { chunk, length ->
+                    if (!running.get()) return@frames false
+                    onFrame?.invoke(AudioFrame(chunk, AudioFrame.peakOf(chunk, length), position))
                     position += AudioFrame.FRAME_MS
                     Thread.sleep(frameDelayMs)
+                    true
                 }
 
                 if (running.get()) onCompleted?.invoke()
             } catch (_: InterruptedException) {
                 // stopped
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Errors too (out of memory on a huge foreign file): Retry fails instead of taking the app down.
                 onFault?.invoke(e)
             }
         }
@@ -173,4 +182,70 @@ class WavReplayAudioCapture(private val path: String, private val speed: Double)
     }
 
     override fun close() = stop()
+
+    /** Calls [emit] with each whole, zero-padded frame and the length of real audio in it, until it returns false. */
+    private fun frames(emit: (ByteArray, Int) -> Boolean) {
+        val data = PcmData.locate(path)
+        if (data == null) {
+            // Not 16 kHz mono PCM16: convert in memory (small test files).
+            val pcm = WavData.read(path).toMono16k()
+            var offset = 0
+            while (offset < pcm.size) {
+                val len = minOf(AudioFrame.FRAME_BYTES, pcm.size - offset)
+                if (!emit(pcm.copyOfRange(offset, offset + len).copyOf(AudioFrame.FRAME_BYTES), len)) return
+                offset += len
+            }
+
+            return
+        }
+
+        RandomAccessFile(path, "r").use { file ->
+            file.seek(data.offset)
+            var remaining = data.length
+            while (remaining > 0) {
+                val chunk = ByteArray(AudioFrame.FRAME_BYTES)
+                val len = file.read(chunk, 0, minOf(chunk.size.toLong(), remaining).toInt())
+                if (len <= 0) break
+                remaining -= len
+                if (!emit(chunk, len)) return
+            }
+        }
+    }
+}
+
+/** Where the PCM data of a 16 kHz mono 16-bit WAV file lies, found by walking its chunks; null for other formats. */
+internal class PcmData(val offset: Long, val length: Long) {
+    companion object {
+        fun locate(path: String): PcmData? = RandomAccessFile(path, "r").use { file ->
+            val head = ByteArray(12)
+            if (file.length() < 12 || file.read(head) < 12 || String(head, 0, 4, Charsets.US_ASCII) != "RIFF" || String(head, 8, 4, Charsets.US_ASCII) != "WAVE") return null
+            var pos = 12L
+            var pcm16Mono16k = false
+            val chunk = ByteArray(8)
+            while (pos + 8 <= file.length()) {
+                file.seek(pos)
+                file.readFully(chunk)
+                val id = String(chunk, 0, 4, Charsets.US_ASCII)
+                val size = ByteBuffer.wrap(chunk, 4, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+                when (id) {
+                    "fmt " -> {
+                        val fmt = ByteArray(16)
+                        file.readFully(fmt)
+                        val b = ByteBuffer.wrap(fmt).order(ByteOrder.LITTLE_ENDIAN)
+                        pcm16Mono16k = b.getShort(0).toInt() == 1 && b.getShort(2).toInt() == 1 && b.getInt(4) == AudioFrame.SAMPLE_RATE && b.getShort(14).toInt() == 16
+                    }
+                    "data" -> {
+                        if (!pcm16Mono16k) return null
+                        // An unfinished recording says 0: its data runs to the end of the file.
+                        val available = file.length() - (pos + 8)
+                        return PcmData(pos + 8, if (size == 0L || size > available) available else size)
+                    }
+                }
+
+                pos += 8 + size + (size and 1)
+            }
+
+            null
+        }
+    }
 }

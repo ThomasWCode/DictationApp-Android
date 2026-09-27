@@ -101,6 +101,7 @@ class DictationStateMachine(
 data class DictationStatus(
     val state: DictationState = DictationState.Idle,
     val liveText: String = "",
+    /** Height of the level bars (0..1) for the latest frame, scaled to how loudly the user speaks (see LevelMeter). */
     val level: Float = 0f,
     val tone: Tone = Tone.Neutral,
     val cleanupLevel: CleanupLevel = CleanupLevel.Light,

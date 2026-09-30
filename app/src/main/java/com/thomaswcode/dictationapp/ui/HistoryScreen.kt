@@ -196,7 +196,7 @@ fun HistoryDetailScreen(id: Long, onBack: () -> Unit) {
             }
             ActionButton(Icons.Rounded.ContentCopy, "Copy") {
                 scope.launch {
-                    graph.clipboard.setText(r.displayText)
+                    graph.clipboard.setText(r.copyText)
                     status = "Copied to the clipboard."
                 }
             }

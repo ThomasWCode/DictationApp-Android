@@ -185,6 +185,12 @@ regression test, and a deliberate difference is recorded in both decisions files
 A deliberate difference from Windows: its flow bar keeps the square root of the peak. The user asked for the Android
 bubble only; the bars are display, not shared behaviour, so the porting rule does not apply.
 
+## History Copy without the joining space (2026-09-30)
+
+| Request | Decision | Why |
+|---|---|---|
+| On Windows: "The app still inserts a space at the front of the text ... In an empty text box the first line is shifted by one space." The user asked for the Android counterpart only if it fixes a bug that still occurs, not one confined to old records. | History's Copy puts `DictationRecord.copyText` on the clipboard: the text without the joining space it was inserted with. History still shows that space, which is what went into the field. | The Windows investigation (DictationApp PR #9) found four routes to a leading space in an empty box. Only one applies here, and it is live: every dictation added after existing text is stored with its joining space, so copying it from History and pasting it into an empty field started that field with a space. The others do not occur on Android: the spacing memory is used only for unreadable fields, and `FieldInspector.readableText` returns null only for password fields, which get no dictation; the paste path and the copy helpers already put text for pasting by hand on the clipboard without the joining space; Insert already drops it; and an empty field's hint is caught through `isShowingHintText`, the hint-equals-text check and the cursor probe. A web editor's CSS placeholder, the main Windows route, was not checked on the phone. Not changed: after a paste that worked, the dictation stays on the clipboard as pasted (Android cannot restore the clipboard), joining space included. Taking the space off there could race a WebView, which reads the clipboard after the paste action returns. |
+
 ## Testing notes
 
 - JVM tests: the Windows Core test cases ported (normaliser, lists, validator, prompt, assembler, protocol

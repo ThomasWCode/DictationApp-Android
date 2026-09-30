@@ -44,6 +44,12 @@ data class DictationRecord(
 
     val displayText: String get() = insertedText.ifEmpty { rawTranscript }
 
+    /**
+     * What History's Copy puts on the clipboard: [displayText] without the joining space it was inserted with after
+     * existing text, since it may be pasted into an empty field (Insert drops it too, and spaces the new field afresh).
+     */
+    val copyText: String get() = displayText.trimStart()
+
     val appName: String get() = appLabel?.takeIf { it.isNotBlank() } ?: packageName.orEmpty()
 }
 

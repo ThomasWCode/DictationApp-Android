@@ -76,6 +76,8 @@ right app, tone and status.
 - [ ] Search finds by prefix ("isoni" finds "isoniazid") and by app name.
 - [ ] Play, Copy, Insert (returns to the previous app and types there, with the same toasts as a dictation; with no
       field focused, "Copied to clipboard"), Undo AI edit, Delete.
+- [ ] Copy a dictation that was added after existing text (History shows its joining space) and paste it into an
+      empty field: no space at the front.
 - [ ] Correct last dictation proposes changed words; adding them stars them in the dictionary. After a long
       dictation, one fix is still found; changes spread over the whole text give the "too far apart" message.
 - [ ] Test keys lists every model of the chain.
